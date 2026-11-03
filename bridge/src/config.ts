@@ -4,7 +4,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { parseRule } from './policy/rules.ts';
 
 export const BRIDGE_NAME = 'logseq-ai-bridge';
-export const BRIDGE_VERSION = '0.1.0';
+export const BRIDGE_VERSION = '0.2.0';
 export const DEFAULT_PORT = 47615;
 export const MIN_NODE_MAJOR = 26;
 
@@ -25,14 +25,24 @@ export type BridgeConfig = {
   claudeBin: string;
   /** Graph the tools read. null = the CLI's current graph. */
   graph: string | null;
-  /** Graphs the bridge may write to (writes arrive in step 3). Empty = none. */
+  /** Graphs the bridge may write to (after approval). Empty = none. */
   writeGraphs: string[];
+  /**
+   * Per graph: which approved-write kinds skip the card.
+   *   none       every write needs Apply (default)
+   *   additions  new blocks/tasks/pages go in directly, but only when the card would show no warnings
+   *   all        everything goes in directly (still checked and logged)
+   */
+  autoApply: Record<string, AutoApplyMode>;
   cliTimeoutMs: number;
   cliConcurrency: number;
   /** Pass --restricted to claude (no user/project settings, no code tools). Default true. */
   claudeRestricted: boolean;
   policy: PolicyConfig;
 };
+
+export type AutoApplyMode = 'none' | 'additions' | 'all';
+const AUTO_MODES: readonly AutoApplyMode[] = ['none', 'additions', 'all'];
 
 export type DataPaths = {
   root: string;
@@ -83,6 +93,7 @@ export function defaultConfig(): BridgeConfig {
     claudeBin: join(home, '.local', 'bin', 'claude'),
     graph: null,
     writeGraphs: [],
+    autoApply: {},
     cliTimeoutMs: 15000,
     cliConcurrency: 2,
     claudeRestricted: true,
@@ -154,6 +165,16 @@ export function mergeConfig(base: BridgeConfig, raw: unknown): BridgeConfig {
   if (input.writeGraphs !== undefined) {
     if (!isStringArray(input.writeGraphs)) throw new Error('config.json: "writeGraphs" must be an array of strings');
     out.writeGraphs = [...input.writeGraphs];
+  }
+  if (input.autoApply !== undefined) {
+    const a = input.autoApply;
+    if (a === null || typeof a !== 'object' || Array.isArray(a)) throw new Error('config.json: "autoApply" must be an object like {"AI Sandbox": "additions"}');
+    const outA: Record<string, AutoApplyMode> = {};
+    for (const [graph, mode] of Object.entries(a as Record<string, unknown>)) {
+      if (!AUTO_MODES.includes(mode as AutoApplyMode)) throw new Error(`config.json: autoApply["${graph}"] must be "none", "additions" or "all"`);
+      outA[graph] = mode as AutoApplyMode;
+    }
+    out.autoApply = outA;
   }
   for (const key of ['cliTimeoutMs', 'cliConcurrency'] as const) {
     const v = input[key];

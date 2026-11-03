@@ -1,6 +1,7 @@
 import { BridgeError } from './bridge';
 import type { BridgeClient, ConnState } from './bridge';
 import { renderMarkdown } from './render';
+import { PANEL_VERSION } from './version';
 import type { ApprovalView, BridgeEvent, ChatMeta, Effort, EditorPort, ProviderInfo, StoredMessage } from './types';
 
 /**
@@ -57,6 +58,7 @@ export class Panel {
     stop: HTMLButtonElement;
   };
   #providers: ProviderInfo[] = [];
+  #bridgeVersion = '?';
   #chats: ChatMeta[] = [];
   #chatId: string | null = null;
   #epoch: string | null = null;
@@ -173,7 +175,8 @@ export class Panel {
       return;
     }
     try {
-      await b.health();
+      const h = await b.health();
+      this.#bridgeVersion = h.version ?? '?';
       this.#conn({ state: 'live', mode: b.mode });
       this.#providers = await b.providers();
       this.#chats = await b.chats();
@@ -244,7 +247,7 @@ export class Panel {
   #conn(s: ConnState): void {
     const el = this.#els.status;
     if (s.state === 'live') {
-      el.textContent = `● Connected${s.mode === 'proxy' ? ' (via Logseq)' : ''}`;
+      el.textContent = `● Connected${s.mode === 'proxy' ? ' (via Logseq)' : ''} · panel ${PANEL_VERSION} · bridge ${this.#bridgeVersion}`;
       el.className = 'lsai-status lsai-good';
     } else if (s.state === 'retrying') {
       el.textContent = `○ Reconnecting… ${s.error ?? ''}`;
@@ -523,8 +526,13 @@ export class Panel {
         const card = this.#cards.get(String(ev.data.id));
         if (card) {
           const outcome = String(ev.data.outcome);
+          const auto = card.root.classList.contains('lsai-card-auto');
           card.status.textContent =
-            outcome === 'applied' ? `✓ Applied: ${String(ev.data.detail ?? '')}` : outcome === 'failed' ? `✗ Failed: ${String(ev.data.detail ?? '')}` : '✗ Not applied';
+            outcome === 'applied'
+              ? `✓ ${auto ? 'Auto-applied' : 'Applied'}: ${String(ev.data.detail ?? '')}`
+              : outcome === 'failed'
+                ? `✗ Failed: ${String(ev.data.detail ?? '')}`
+                : '✗ Not applied';
           card.root.classList.add(`lsai-card-${outcome}`);
           for (const b of card.buttons) b.disabled = true;
           card.root.querySelector('.lsai-note')?.setAttribute('disabled', 'true');
@@ -588,6 +596,16 @@ export class Panel {
       const ul = this.#h('ul', 'lsai-warnings');
       for (const w of a.warnings) ul.appendChild(this.#h('li', undefined, `⚠ ${w}`));
       root.appendChild(ul);
+    }
+    if (a.auto) {
+      // autoApply covers this change: a record of what went in, no buttons.
+      root.classList.add('lsai-card-auto');
+      const status = this.#h('div', 'lsai-card-status', 'Applying automatically (autoApply for this graph)…');
+      root.appendChild(status);
+      (this.#live?.root ?? this.#els.log).appendChild(root);
+      this.#cards.set(a.id, { root, status, buttons: [] });
+      this.#scroll(true);
+      return;
     }
     const note = this.#h('input', 'lsai-note');
     note.type = 'text';

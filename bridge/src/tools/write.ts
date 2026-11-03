@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ApprovalRequest, ApprovalView } from '../approvals.ts';
+import type { AutoApplyMode } from '../config.ts';
 import type { AuditLog } from '../audit.ts';
 import { chainOf, isPage, resultItems } from '../graph/entity.ts';
 import type { GNode } from '../graph/entity.ts';
@@ -36,7 +37,11 @@ export type WriteToolDeps = {
   /** For the temporary blocks file (mode 0600), deleted when the approval is settled. */
   runDir: string;
   audit?: AuditLog;
+  /** This graph's autoApply setting (default none). */
+  autoApply?: AutoApplyMode;
 };
+
+const ADDITIONS = new Set(['insert_blocks', 'create_task', 'create_page']);
 
 type Prepared = {
   approval: ApprovalRequest;
@@ -168,8 +173,11 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
       const graph = writable();
       await ensureTag(graph);
       const prepared = await prepare(args, ctx, graph);
+      const mode = deps.autoApply ?? 'none';
+      // Additions skip the card only when it would show no warnings (links, images, new pages, hidden refs).
+      const auto = mode === 'all' || (mode === 'additions' && ADDITIONS.has(name) && prepared.approval.warnings.length === 0);
       try {
-        const { view, decision } = await ctx.approve(prepared.approval);
+        const { view, decision } = await ctx.approve({ ...prepared.approval, ...(auto ? { auto: true } : {}) });
         const done = (outcome: 'applied' | 'rejected' | 'failed', detail: string, targetUuids: string[]): void => {
           ctx.resolved?.(view as ApprovalView, outcome, detail);
           void deps.audit?.record({ kind: 'write', chatId: ctx.chatId ?? 'cli', ...(ctx.turnId ? { turnId: ctx.turnId } : {}), tool: name, outcome, targetUuids, locality: ctx.locality });
@@ -178,6 +186,8 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
           const why =
             decision.reason === 'timeout'
               ? 'No answer from the user within the time limit; nothing was changed.'
+              : decision.reason === 'no-panel'
+                ? "The user can't see approval cards right now (their Logseq AI panel isn't open on this chat or needs an update); nothing was changed. Tell them, and don't retry until they say so."
               : decision.reason === 'cancelled'
                 ? 'The user stopped this turn; nothing was changed.'
                 : `The user rejected this change; nothing was changed.${decision.note ? ` Their note: ${quote(decision.note, 500)}` : ''} Don't retry the same change unless they ask.`;

@@ -47,6 +47,8 @@ export type ApprovalView = {
   body: PreviewBody;
   warnings: string[];
   createdAt: number;
+  /** Applied without waiting, because of this graph's autoApply setting. */
+  auto?: boolean;
 };
 
 export type ChatState = { chat: ChatMeta; messages: StoredMessage[]; busy: boolean; lastSeq: number; epoch: string; approvals?: ApprovalView[] };

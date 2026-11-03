@@ -158,7 +158,7 @@ test('approvals: timeout and cancel reject; unknown ids are refused', async () =
     if (!l) logs.set(id, (l = new EventLog('e')));
     return l;
   };
-  const a = new Approvals({ events, timeoutMs: 50 });
+  const a = new Approvals({ events, timeoutMs: 50, requireUi: false });
   const req: ApprovalRequest = { tool: 'x', title: 't', target: 'g', body: { kind: 'text', text: 'b' }, warnings: [] };
   assert.equal((await a.request('c1', 't1', req)).decision.reason, 'timeout');
   const p = a.request('c2', 't2', req);
@@ -167,6 +167,59 @@ test('approvals: timeout and cancel reject; unknown ids are refused', async () =
   assert.equal((await p).decision.reason, 'cancelled');
   assert.equal(a.decide('00000000-0000-4000-8000-000000000000', 'apply'), false);
   assert.equal(events('c2').since(0).events[0]?.type, 'approval.request');
+});
+
+test('approvals fail fast when no card-capable panel is attached; auto requests never wait', async () => {
+  const logs = new Map<string, EventLog>();
+  const events = (id: string): EventLog => {
+    let l = logs.get(id);
+    if (!l) logs.set(id, (l = new EventLog('e')));
+    return l;
+  };
+  const a = new Approvals({ events, timeoutMs: 60_000 });
+  const req: ApprovalRequest = { tool: 'x', title: 't', target: 'g', body: { kind: 'text', text: 'b' }, warnings: [] };
+  const t0 = Date.now();
+  assert.equal((await a.request('c', 't', req)).decision.reason, 'no-panel');
+  assert.ok(Date.now() - t0 < 1000);
+  assert.match(String(events('c').since(0).events.at(-1)?.data.message), /no Logseq AI panel/);
+  assert.equal((await a.request('c', 't', { ...req, auto: true })).decision.reason, 'auto');
+  const detach = a.uiAttach('c');
+  const pending = a.request('c', 't', req);
+  assert.equal(a.pending('c').length, 1);
+  a.decide(a.pending('c')[0]?.id as string, 'apply');
+  assert.equal((await pending).decision.decision, 'apply');
+  detach();
+  assert.equal(a.hasUi('c'), false);
+  a.uiSeen('c');
+  assert.equal(a.hasUi('c'), true, 'a recent long-poll counts');
+});
+
+test('autoApply "additions": plain additions skip the card, anything with a warning or an edit does not', async () => {
+  const fake = new FakeLogseq();
+  const reader = new GraphReader({ run: fake.run, graph: 'AI Sandbox' });
+  const policy = new Policy({ deny: [], allow: [] });
+  const runDir = await mkdtemp(join(tmpdir(), 'lsai-wa-'));
+  const tools = writeTools({ run: fake.run, reader, policy, ensureGraph: async () => {}, graph: 'AI Sandbox', writeGraphs: ['AI Sandbox'], runDir, autoApply: 'additions' });
+  const tool = (n: string): ToolDef => tools.find((t) => t.name === n) as ToolDef;
+  const seen: { auto: boolean; title: string }[] = [];
+  // Like the real Approvals: auto → apply; otherwise the user rejects here.
+  const c: ToolContext = {
+    locality: 'cloud',
+    chatId: 'c',
+    turnId: 't',
+    approve: async (req) => {
+      seen.push({ auto: req.auto === true, title: req.title });
+      return { view: { ...req, id: 'x', chatId: 'c', turnId: 't', createdAt: 0 }, decision: req.auto ? { decision: 'apply', reason: 'auto' } : { decision: 'reject', reason: 'user' } };
+    },
+  };
+  assert.match((await tool('insert_blocks').run({ page: 'AI Test', markdown: '- a plain note' }, c)).text, /^Applied/);
+  assert.match((await tool('create_task').run({ content: 'Buy pears', page: 'AI Test' }, c)).text, /^Applied/);
+  assert.match((await tool('insert_blocks').run({ page: 'AI Test', markdown: '- see https://example.com' }, c)).text, /rejected/, 'a web link → manual card');
+  assert.match((await tool('insert_blocks').run({ page: 'AI Test', markdown: '- about [[Brand New]]' }, c)).text, /rejected/, 'a new page → manual card');
+  assert.match((await tool('update_block').run({ uuid: 'a558ac4e-ae05-43f3-af22-f167c5f56975', content: 'Apples are green' }, c)).text, /rejected/, 'edits always need Apply');
+  assert.match((await tool('remove_block').run({ uuid: '54f76cdd-307a-436e-9716-f129841c97e6' }, c)).text, /rejected/, 'deletes always need Apply');
+  assert.deepEqual(seen.map((x) => x.auto), [true, true, false, false, false, false]);
+  assert.equal(fake.writes.length, 3, 'insert + task + its tag');
 });
 
 test('end to end: claude proposes a write, the panel approves it over HTTP', async () => {
@@ -202,6 +255,7 @@ test('end to end: claude proposes a write, the panel approves it over HTTP', asy
         r.end(body);
       }
     });
+    const detach = rt.approvals.uiAttach(chat.id); // as the panel's event stream (caps=approvals) would
     const { done } = await rt.turns.start(chat.id, { text: 'FAKE:write', providerId: 'claude', model: 'sonnet', effort: 'auto', contextUuids: [] });
     await done;
     const text = events.filter((e) => e.type === 'text.delta').map((e) => String(e.data.text)).join('');
@@ -212,6 +266,7 @@ test('end to end: claude proposes a write, the panel approves it over HTTP', asy
     assert.equal(events.find((e) => e.type === 'approval.resolved')?.data.outcome, 'applied');
     assert.equal(fake.writes.length, 1);
     assert.equal(rt.approvals.pending(chat.id).length, 0);
+    detach();
   } finally {
     await shutdown(rt.server);
   }

@@ -534,6 +534,38 @@ AI Test is unchanged.
 7. Ask for a change, then press **Stop** while the card is waiting. The
    card says `✗ Not applied`.
 
+### 4b. Auto-apply for additions (your choice B)
+
+This sets AI Sandbox to auto-apply additions. Your real graph is unaffected
+and isn't in `writeGraphs` anyway.
+
+```bash
+node -e 'const fs=require("fs");const f=process.env.HOME+"/Library/Application Support/logseq-ai/config.json";const c=JSON.parse(fs.readFileSync(f));c.autoApply={"AI Sandbox":"additions"};fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")'
+```
+
+Restart the bridge.
+
+- *"Write a short poem in today's journal."* The block goes in right away. A
+  dashed card reads `✓ Auto-applied: …`, and there are no buttons.
+- *"Add a block with a link to https://example.com to AI Test."* It has a web
+  link, so you get the normal card with Apply/Reject.
+- Edits and deletes always show the normal card.
+
+Values: `"none"` (every write needs Apply), `"additions"` (new blocks, tasks
+and pages without warnings go in directly), `"all"` (everything goes in
+directly).
+
+### Which build is running?
+
+The panel's status line shows `● Connected · panel 0.2.0 · bridge 0.2.0`. If
+it shows no version numbers, Logseq still runs an old plugin build. Run
+`npm run build` in `plugin/`, then switch the plugin off and on. Approval cards
+need panel ≥ 0.2.0.
+
+If a write needs your approval and no up-to-date panel is open on that chat,
+the bridge doesn't wait. It tells Claude right away that nothing was changed,
+and the chat shows a notice.
+
 ### 5. Audit log
 
 ```bash

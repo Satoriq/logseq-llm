@@ -21,11 +21,13 @@ export type ApprovalRequest = {
   target: string;
   body: PreviewBody;
   warnings: string[];
+  /** Set by the write tool when this graph's autoApply setting covers this change: applied without waiting. */
+  auto?: boolean;
 };
 
 export type ApprovalView = ApprovalRequest & { id: string; chatId: string; turnId: string; createdAt: number };
 
-export type Decision = { decision: 'apply' | 'reject'; note?: string; reason?: 'user' | 'timeout' | 'cancelled' };
+export type Decision = { decision: 'apply' | 'reject'; note?: string; reason?: 'user' | 'timeout' | 'cancelled' | 'auto' | 'no-panel' };
 
 type Pending = { view: ApprovalView; resolve: (d: Decision) => void; timer: NodeJS.Timeout };
 
@@ -33,14 +35,55 @@ export class Approvals {
   readonly timeoutMs: number;
   #pending = new Map<string, Pending>();
   #events: (chatId: string) => EventLog;
+  /** Panels that can show cards: open SSE streams per chat, and last long-poll time. */
+  #streams = new Map<string, number>();
+  #polled = new Map<string, number>();
+  readonly requireUi: boolean;
 
-  constructor(opts: { events: (chatId: string) => EventLog; timeoutMs?: number }) {
+  constructor(opts: { events: (chatId: string) => EventLog; timeoutMs?: number; requireUi?: boolean }) {
     this.#events = opts.events;
     this.timeoutMs = opts.timeoutMs ?? 10 * 60_000;
+    this.requireUi = opts.requireUi ?? true;
+  }
+
+  /** A panel that can show approval cards opened an event stream for this chat. Returns the detach function. */
+  uiAttach(chatId: string): () => void {
+    this.#streams.set(chatId, (this.#streams.get(chatId) ?? 0) + 1);
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      const n = (this.#streams.get(chatId) ?? 1) - 1;
+      if (n <= 0) this.#streams.delete(chatId);
+      else this.#streams.set(chatId, n);
+    };
+  }
+
+  /** A card-capable panel long-polled this chat. */
+  uiSeen(chatId: string): void {
+    this.#polled.set(chatId, Date.now());
+  }
+
+  hasUi(chatId: string): boolean {
+    return (this.#streams.get(chatId) ?? 0) > 0 || Date.now() - (this.#polled.get(chatId) ?? 0) < 45_000;
   }
 
   request(chatId: string, turnId: string, req: ApprovalRequest): Promise<{ view: ApprovalView; decision: Decision }> {
     const view: ApprovalView = { ...req, id: randomUUID(), chatId, turnId, createdAt: Date.now() };
+    if (req.auto) {
+      // Covered by this graph's autoApply setting: shown as a record card, applied right away.
+      this.#events(chatId).append('approval.request', view as unknown as Record<string, unknown>, turnId);
+      return Promise.resolve({ view, decision: { decision: 'apply', reason: 'auto' } });
+    }
+    if (this.requireUi && !this.hasUi(chatId)) {
+      // Nobody can see a card (panel closed on another chat, not running, or too old): don't hang for 10 minutes.
+      this.#events(chatId).append(
+        'notice',
+        { message: "A change needs your approval, but no Logseq AI panel that can show approval cards is open on this chat (update or reload the plugin). Nothing was changed." },
+        turnId,
+      );
+      return Promise.resolve({ view, decision: { decision: 'reject', reason: 'no-panel' } });
+    }
     return new Promise((resolve) => {
       const timer = setTimeout(() => this.#finish(view.id, { decision: 'reject', reason: 'timeout' }), this.timeoutMs);
       this.#pending.set(view.id, { view, resolve: (decision) => resolve({ view, decision }), timer });

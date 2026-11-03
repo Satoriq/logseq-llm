@@ -326,12 +326,15 @@ export function createBridgeServer(deps: ServerDeps): Server {
     const after = Number(afterRaw);
     const log_ = deps.turns.eventLog(chatId);
     const wantsSse = (req.headers.accept ?? '').includes('text/event-stream');
+    // Panels that can show approval cards say so; without one, approvals fail fast instead of hanging.
+    const canApprove = (url.searchParams.get('caps') ?? '').split(',').includes('approvals');
 
     if (!wantsSse) {
       // Long-poll fallback (works through logseq.Request, which can't stream).
       const waitRaw = url.searchParams.get('wait') ?? '0';
       if (!/^\d{1,3}$/.test(waitRaw)) throw new HttpError(400, '"wait" must be seconds');
       const wait = Math.min(Number(waitRaw), MAX_LONG_POLL_S);
+      if (canApprove) deps.approvals?.uiSeen(chatId);
       if (wait > 0) {
         const ac = new AbortController();
         req.on('close', () => ac.abort());
@@ -357,8 +360,10 @@ export function createBridgeServer(deps: ServerDeps): Server {
       res.write(sseFrame(ev));
     });
     const heartbeat = setInterval(() => res.write(': ping\n\n'), SSE_HEARTBEAT_MS);
+    const detach = canApprove && deps.approvals ? deps.approvals.uiAttach(chatId) : () => undefined;
     const close = (): void => {
       clearInterval(heartbeat);
+      detach();
       unsubscribe();
     };
     req.on('close', close);

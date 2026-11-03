@@ -38,7 +38,17 @@ export function buildGraph(config: BridgeConfig, paths?: DataPaths): Graph {
   const tools = readTools({ reader, policy, ensureGraph });
   if (paths) {
     tools.push(
-      ...writeTools({ run: (req) => cli.run(req), reader, policy, ensureGraph, graph: config.graph, writeGraphs: config.writeGraphs, runDir: paths.run, audit: new AuditLog(paths.audit) }),
+      ...writeTools({
+        run: (req) => cli.run(req),
+        reader,
+        policy,
+        ensureGraph,
+        graph: config.graph,
+        writeGraphs: config.writeGraphs,
+        runDir: paths.run,
+        audit: new AuditLog(paths.audit),
+        autoApply: config.graph !== null ? (config.autoApply[config.graph] ?? 'none') : 'none',
+      }),
     );
   }
   return { cli, reader, policy, guard, tools };

@@ -124,7 +124,8 @@ export class BridgeClient {
     let stopped = false;
     let backoff = 1000;
     let ac: AbortController | null = null;
-    const path = (wait: number): string => `/v1/chats/${encodeURIComponent(chatId)}/events?after=${last}${wait ? `&wait=${wait}` : ''}`;
+    // caps=approvals tells the bridge this panel can show approval cards (otherwise writes fail fast).
+    const path = (wait: number): string => `/v1/chats/${encodeURIComponent(chatId)}/events?after=${last}&caps=approvals${wait ? `&wait=${wait}` : ''}`;
     const deliver = (ev: BridgeEvent): void => {
       if (typeof ev.seq === 'number' && ev.seq > last) last = ev.seq;
       onEvent(ev);

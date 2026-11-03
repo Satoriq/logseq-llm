@@ -50,6 +50,8 @@ test('config: defaults are written on first load, unknown keys refused', async (
   assert.throws(() => mergeConfig(defaultConfig(), { logseqBin: 'logseq' }), /absolute/);
   assert.throws(() => mergeConfig(defaultConfig(), { port: 80 }), /port/);
   assert.throws(() => mergeConfig(defaultConfig(), { policy: { block: [] } }), /policy key/);
+  assert.throws(() => mergeConfig(defaultConfig(), { autoApply: { 'AI Sandbox': 'everything' } }), /autoApply/);
+  assert.deepEqual(mergeConfig(defaultConfig(), { autoApply: { 'AI Sandbox': 'additions' } }).autoApply, { 'AI Sandbox': 'additions' });
   const merged = mergeConfig(defaultConfig(), { graph: 'Sandbox', writeGraphs: ['Sandbox'], logseqBin: '~/bin/logseq' });
   assert.equal(merged.graph, 'Sandbox');
   assert.ok(merged.logseqBin.endsWith('/bin/logseq') && !merged.logseqBin.startsWith('~'));
