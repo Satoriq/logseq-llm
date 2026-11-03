@@ -13,7 +13,9 @@
 | 2026-11-03 | **Coding waits** for your go-ahead. |
 | 2026-11-03 | Bridge tokens live in `secrets/tokens.json` (0600, in the 0700 data dir), not the Keychain. The plugin's copy sits in Logseq's plain-text plugin settings anyway, and writing to the Keychain with the `security` command would put the token in process arguments. API keys (step 4) go in the Keychain. |
 | 2026-11-03 | Step 1 is split into 1a, 1b and 1c so each part can be tested on its own. |
-| open | Q5 voice edits, Q6 trigger, Q7 D approval (defaults in §3). `@logseq/libs` version (0.3.4 proposed). |
+| 2026-11-03 | `@logseq/libs` pinned to exactly **0.3.4** (npm tag `next`), installed with `npm install --save-exact @logseq/libs@0.3.4`. |
+| 2026-11-03 | Sandbox graph "AI Sandbox" created and set as `graph` in config.json. |
+| open | Q5 voice edits, Q6 trigger, Q7 D approval (defaults in §3). |
 
 An AI chat panel inside Logseq DB (desktop, macOS) for personal use. It has a
 local Node "bridge", graph tools built on the `logseq` CLI, privacy filtering in

@@ -139,17 +139,27 @@ export async function runDoctor(opts: DoctorOptions): Promise<boolean> {
     await writeFile(helpFile, helpParts.join('\n\n'), { mode: 0o600 });
     out(`      saved CLI help to ${helpFile}`);
 
-    if (opts.samplePage !== undefined) {
-      const r = await cli.run({ command: ['show'], graph: config.graph, options: { page: opts.samplePage, level: 2 } });
-      const f = join(paths.doctor, 'sample-show.json');
+    const graphLabel = config.graph === null ? "the CLI's current graph" : `graph "${config.graph}"`;
+    const sample = async (name: string, file: string, req: Parameters<LogseqCli['run']>[0]): Promise<void> => {
+      const r = await cli.run(req);
+      const f = join(paths.doctor, file);
       await writeFile(f, r.stdout || r.stderr, { mode: 0o600 });
-      add({ name: 'sample show', ok: r.ok, detail: `${f} (contains note text: share only if harmless)` });
+      const reason = (r.stderr.trim() || r.stdout.trim()).split('\n')[0]?.slice(0, 200) ?? '';
+      add({
+        name,
+        ok: r.ok,
+        // A missing sample page is not a health problem, so this never fails doctor.
+        warnOnly: true,
+        detail: r.ok
+          ? `${f} from ${graphLabel} (contains note text: share only if harmless)`
+          : `exit ${r.exitCode} on ${graphLabel}: ${reason} (output saved to ${f})`,
+      });
+    };
+    if (opts.samplePage !== undefined) {
+      await sample('sample show', 'sample-show.json', { command: ['show'], graph: config.graph, options: { page: opts.samplePage, level: 2 } });
     }
     if (opts.sampleSearch !== undefined) {
-      const r = await cli.run({ command: ['search', 'block'], graph: config.graph, options: { content: opts.sampleSearch } });
-      const f = join(paths.doctor, 'sample-search.json');
-      await writeFile(f, r.stdout || r.stderr, { mode: 0o600 });
-      add({ name: 'sample search', ok: r.ok, detail: `${f} (contains note text: share only if harmless)` });
+      await sample('sample search', 'sample-search.json', { command: ['search', 'block'], graph: config.graph, options: { content: opts.sampleSearch } });
     }
   }
 
