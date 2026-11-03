@@ -46,6 +46,16 @@ if (prompt.includes('FAKE:tool')) {
   const call = await rpc('tools/call', { name: 'get_page', arguments: { title: 'AI Test' } }, 3);
   text += ` tools=${list.result.tools.length} page=${JSON.stringify(call.result.content[0].text)}`;
 }
+if (prompt.includes('FAKE:write')) {
+  // Like a real model: propose a write and report what the tool answered (Applied / rejected).
+  const r = await fetch(mcp.url, {
+    method: 'POST',
+    headers: { ...mcp.headers, 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'insert_blocks', arguments: { page: 'AI Test', markdown: '- Written by AI\n  - with a child' } } }),
+  });
+  const j = await r.json();
+  text += ` write=${JSON.stringify(j.result.content[0].text)}`;
+}
 if (prompt.includes('FAKE:error')) {
   out({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'boom', session_id: session });
   process.exit(1);

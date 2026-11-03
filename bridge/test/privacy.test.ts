@@ -56,8 +56,10 @@ test('get_page as cloud: #private and ai-access blocks are gone, with their chil
   for (const hidden of ['secret', 'Child of secret', 'Local only note', 'Totally secret', 'local-only']) {
     assert.ok(!out.text.includes(hidden), `cloud view leaked "${hidden}":\n${out.text}`);
   }
-  // #private block + its child, the local-only block, the ai-access:none block
-  assert.equal(out.hiddenCount, 4);
+  // #private block + its child, the local-only block, the ai-access:none block, the #private child of "Visible parent"
+  assert.equal(out.hiddenCount, 5);
+  assert.match(out.text, /Visible parent/);
+  assert.ok(!out.text.includes('Private child'));
   assert.ok(out.sentUuids.includes('a558ac4e-ae05-43f3-af22-f167c5f56975'));
   assert.ok(!out.sentUuids.includes('ef13d15c-eb66-4eb1-ab54-edbae48baa8e'));
   // Child is indented under its parent, ids are shown.

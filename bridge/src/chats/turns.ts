@@ -35,12 +35,19 @@ export class TurnRunner {
   #audit: AuditLog;
   #logs = new Map<string, EventLog>();
   #active = new Map<string, ActiveTurn>();
+  #onSettled: ((chatId: string) => void) | undefined;
 
-  constructor(opts: { store: ChatStore; providers: Provider[]; audit: AuditLog; epoch: string }) {
+  constructor(opts: { store: ChatStore; providers: Provider[]; audit: AuditLog; epoch: string; onSettled?: (chatId: string) => void }) {
     this.#store = opts.store;
     this.#providers = new Map(opts.providers.map((p) => [p.id, p]));
     this.#audit = opts.audit;
     this.epoch = opts.epoch;
+    this.#onSettled = opts.onSettled;
+  }
+
+  /** Called when a turn is cancelled or ends (e.g. to reject approvals still waiting). */
+  set onSettled(fn: ((chatId: string) => void) | undefined) {
+    this.#onSettled = fn;
   }
 
   providers(): Provider[] {
@@ -110,6 +117,7 @@ export class TurnRunner {
     const active = this.#active.get(chatId);
     if (!active) return false;
     active.controller.abort();
+    this.#onSettled?.(chatId);
     return true;
   }
 
@@ -162,6 +170,7 @@ export class TurnRunner {
         log.error('could not store assistant message', { chatId, turnId, error: (err as Error).message });
       }
       this.#active.delete(chatId);
+      this.#onSettled?.(chatId);
       events.append('turn.end', { stopReason, ...(usage ? { usage } : {}) }, turnId);
       await this.#audit.record({ kind: 'turn.end', chatId, turnId, provider: provider.id, model: modelId, outcome: stopReason });
     }

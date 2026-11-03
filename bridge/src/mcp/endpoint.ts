@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { Approvals } from '../approvals.ts';
 import type { AuditLog } from '../audit.ts';
 import { newToken, tokenEquals } from '../auth.ts';
 import type { Locality } from '../chats/store.ts';
@@ -62,10 +63,12 @@ export class McpEndpoint {
   #tools: ToolDef[];
   #audit: AuditLog;
   #events: (chatId: string) => EventLog;
+  #approvals: Approvals | undefined;
 
-  constructor(opts: { tools: ToolDef[]; audit: AuditLog; events: (chatId: string) => EventLog }) {
-    // 1c exposes read tools only; writes (with approval cards) arrive in step 3.
-    this.#tools = opts.tools.filter((t) => t.kind === 'read');
+  constructor(opts: { tools: ToolDef[]; audit: AuditLog; events: (chatId: string) => EventLog; approvals?: Approvals }) {
+    // Write tools only when approvals are wired: every write waits for Apply in the panel.
+    this.#approvals = opts.approvals;
+    this.#tools = opts.tools.filter((t) => t.kind === 'read' || (t.kind === 'write' && opts.approvals !== undefined));
     this.#audit = opts.audit;
     this.#events = opts.events;
   }
@@ -125,7 +128,21 @@ export class McpEndpoint {
     }
     events.append('tool.start', { callId, name: tool.name, label }, session.turnId);
     try {
-      const out = await tool.run(a, { locality: session.locality });
+      const approvals = this.#approvals;
+      const out = await tool.run(a, {
+        locality: session.locality,
+        chatId: session.chatId,
+        turnId: session.turnId,
+        ...(approvals
+          ? {
+              approve: (req) => {
+                events.append('tool.waiting', { callId, label: 'waiting for your approval' }, session.turnId);
+                return approvals.request(session.chatId, session.turnId, req);
+              },
+              resolved: (view, outcome, detail) => approvals.resolved(view, outcome, detail),
+            }
+          : {}),
+      });
       events.append('tool.end', { callId, ok: true, summary: `${out.sentUuids.length} item(s)`, hiddenCount: out.hiddenCount }, session.turnId);
       await this.#audit.record({
         kind: 'tool',
@@ -136,7 +153,9 @@ export class McpEndpoint {
         sentUuids: out.sentUuids,
         hiddenCount: out.hiddenCount,
       });
-      return { content: [{ type: 'text', text: `${NOTE_PREAMBLE}\n<notes>\n${out.text}\n</notes>` }] };
+      // Reads carry note text (untrusted data); write results are the bridge's own status messages.
+      const text = tool.kind === 'read' ? `${NOTE_PREAMBLE}\n<notes>\n${out.text}\n</notes>` : out.text;
+      return { content: [{ type: 'text', text }] };
     } catch (err) {
       const expected = err instanceof ToolInputError || err instanceof GraphError;
       if (!expected) log.error('tool failed', { tool: tool.name, error: (err as Error).message });

@@ -1,12 +1,21 @@
+import type { ApprovalRequest, ApprovalView, Decision } from '../approvals.ts';
 import type { Locality } from '../chats/store.ts';
 
 /** Provider-neutral tool definition. The same set goes to claude (MCP), the APIs and Ollama. */
 export type ToolKind = 'read' | 'write' | 'editor';
 
+export type ApproveFn = (req: ApprovalRequest) => Promise<{ view: ApprovalView; decision: Decision }>;
+
 export type ToolContext = {
   /** Who will see the result. 'cloud' hides #private / local-only content. */
   locality: Locality;
   signal?: AbortSignal;
+  chatId?: string;
+  turnId?: string;
+  /** Shows an approval card and waits for Apply/Reject. Write tools refuse to run without it. */
+  approve?: ApproveFn;
+  /** Reports how an approval ended (shown on the card). */
+  resolved?: (view: ApprovalView, outcome: 'applied' | 'rejected' | 'failed', detail: string) => void;
 };
 
 export type ToolOutput = {

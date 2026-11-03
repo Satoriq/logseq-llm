@@ -86,7 +86,7 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'tools') {
-    for (const t of buildGraph(config).tools) process.stdout.write(`${t.name} (${t.kind})\n  ${t.description}\n`);
+    for (const t of buildGraph(config, paths).tools) process.stdout.write(`${t.name} (${t.kind})\n  ${t.description}\n`);
     return;
   }
 
@@ -103,10 +103,22 @@ async function main(): Promise<void> {
       throw new Error('tool arguments must be JSON, e.g. \'{"title":"AI Test"}\'');
     }
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('tool arguments must be a JSON object');
-    const graph = buildGraph(config);
+    const graph = buildGraph(config, paths);
     const tool = graph.tools.find((t) => t.name === name);
     if (!tool) throw new Error(`unknown tool "${name}" (see: tools)`);
-    const out = await tool.run(parsed as Record<string, unknown>, { locality: as });
+    // Write tools: print the approval card, then decline. Applying a change needs the panel.
+    const out = await tool.run(parsed as Record<string, unknown>, {
+      locality: as,
+      approve: async (req) => {
+        process.stdout.write(`--- approval card (preview only; writes are applied from the panel)\n${req.title}\nwhere: ${req.target}\n`);
+        const b = req.body;
+        if (b.kind === 'diff') process.stdout.write(`before: ${b.before}\nafter:  ${b.after}\n`);
+        else process.stdout.write(`${b.text}\n`);
+        for (const w of req.warnings) process.stdout.write(`warning: ${w}\n`);
+        process.stdout.write('---\n');
+        return { view: { ...req, id: 'preview', chatId: 'cli', turnId: 'cli', createdAt: Date.now() }, decision: { decision: 'reject', reason: 'user', note: 'preview only' } };
+      },
+    });
     process.stdout.write(out.text + '\n');
     process.stderr.write(`--- ${as} view: ${out.sentUuids.length} item(s) sent, ${out.hiddenCount} hidden by the privacy filter\n`);
     await new AuditLog(paths.audit).record({ kind: 'tool', chatId: 'cli', tool: tool.name, locality: as, sentUuids: out.sentUuids, hiddenCount: out.hiddenCount });

@@ -442,3 +442,103 @@ text back and uses no model.
 
 To unload: Settings → Plugins → Logseq AI → disable or remove. The panel and
 its styles disappear completely.
+
+## Step 3: writes, only after you approve them
+
+New in this step:
+
+- **Five write tools:** `insert_blocks`, `update_block`, `create_task`,
+  `create_page` and `remove_block`.
+- **Approval card:** every change shows up as a card in the panel first.
+  - It shows the target, a preview (outline, before/after, or exactly what would
+    be deleted), warnings, and **Reject / Apply**.
+  - Nothing is written until you click Apply. No answer within 10 minutes, or
+    **Stop**, counts as Reject.
+  - Your note on a Reject goes back to the AI.
+- **Apply runs exactly the previewed command.** For `insert_blocks`, the CLI's
+  own `--dry-run` checks it first.
+- **Tagging:** everything the AI writes gets `#AI-GENERATED`.
+- **Checks before a card is even shown:**
+  - the graph must be in `writeGraphs`
+  - a cloud model can't write to blocks it can't see (`#private`, local-only)
+  - text containing `[hidden]` is refused, so it can't overwrite a link the
+    AI couldn't see
+  - nobody but you may set `ai-access::`
+  - a new page can't land under a deny rule
+- **Warnings on the card:**
+  - outside links and images
+  - pages that would be created
+  - links to pages the AI can't see
+  - links an edit would drop
+  - for a deletion, blocks underneath that the AI can't see
+
+Your real graph stays read-only: only graphs listed in `writeGraphs` can be
+written, and the list starts empty.
+
+### 1. Update
+
+```bash
+cd "$HOME/logseq-llm" && git pull && cd plugin && npm run build
+```
+
+Restart the bridge (Ctrl-C, then `start` again). In Logseq, reload the
+plugin: Settings → Plugins → Logseq AI → off → on.
+
+### 2. Allow approved writes in the sandbox only
+
+Create the tag once (this writes one tag to AI Sandbox):
+
+```bash
+logseq upsert tag --graph="AI Sandbox" --name=AI-GENERATED
+```
+
+Add AI Sandbox to `writeGraphs`:
+
+```bash
+node -e 'const fs=require("fs");const f=process.env.HOME+"/Library/Application Support/logseq-ai/config.json";const c=JSON.parse(fs.readFileSync(f));c.writeGraphs=["AI Sandbox"];fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")'
+```
+
+```bash
+cd "$HOME/logseq-llm/bridge" && node bin/logseq-ai-bridge.ts doctor
+```
+
+Expected: `ok writes: allowed for "AI Sandbox"` and `ok AI-GENERATED tag: exists`.
+Restart the bridge so it picks up the new config.
+
+### 3. Preview from Terminal (writes nothing)
+
+```bash
+node bin/logseq-ai-bridge.ts tool insert_blocks '{"page":"AI Test","markdown":"- Hello from the bridge\n  - a child"}'
+```
+
+Expected: an "approval card (preview only)" with
+`Add 2 blocks to "AI Test"`, and then `The user rejected this change… "preview only"`.
+AI Test is unchanged.
+
+### 4. In the panel (AI Sandbox open, Claude · cloud)
+
+1. *"Add a short summary of this page as a new block at the end of AI Test."*
+   A card appears and the reply shows "Waiting for your approval…". Click
+   **Apply**. The block appears in Logseq with the `#AI-GENERATED` tag, and the
+   card says `✓ Applied`.
+2. Ask for another addition, type a note such as *"too long"*, then click
+   **Reject**. Nothing is written; Claude sees your note.
+3. *"Change 'Apples are red' to 'Apples are red or green'."* The card
+   shows Before (struck through) and After.
+4. *"Add a task to buy pears on AI Test."* After Apply, a task appears,
+   tagged `#AI-GENERATED`.
+5. *"Delete the summary block you added."* The card lists exactly what
+   would be deleted, and the button says **Delete**.
+6. Privacy: *"Edit the block that says 'This one is secret'."* Claude
+   can't find it, because it's `#private`, and no card appears.
+7. Ask for a change, then press **Stop** while the card is waiting. The
+   card says `✗ Not applied`.
+
+### 5. Audit log
+
+```bash
+tail -n 8 "$HOME/Library/Application Support/logseq-ai/audit.jsonl"
+```
+
+Expected: `"kind":"write"` lines with `"outcome":"applied"` or `"rejected"`
+and the block ids they touched. There is no note text.

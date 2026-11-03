@@ -195,6 +195,28 @@ export async function runDoctor(opts: DoctorOptions): Promise<boolean> {
       add({ name: 'server list', ok: false, warnOnly: true, detail: 'could not read `logseq server list --output=json`' });
     }
 
+    // Writes (step 3): the graph must be listed in writeGraphs, and the AI-GENERATED tag must exist.
+    if (config.graph !== null) {
+      const canWrite = config.writeGraphs.includes(config.graph);
+      add({
+        name: 'writes',
+        ok: canWrite,
+        warnOnly: true,
+        detail: canWrite
+          ? `allowed for "${config.graph}" (each write still needs Apply in the panel)`
+          : `off for "${config.graph}" (add it to "writeGraphs" in config.json to allow approved writes)`,
+      });
+      const tag = await cli.run({ command: ['search', 'tag'], graph: config.graph, options: { content: 'AI-GENERATED' } });
+      const items = ((tag.json as { data?: { items?: unknown } } | null)?.data?.items ?? []) as { 'block/title'?: unknown; title?: unknown }[];
+      const hasTag = tag.ok && Array.isArray(items) && items.some((i) => String(i['block/title'] ?? i.title ?? '').toLowerCase() === 'ai-generated');
+      add({
+        name: 'AI-GENERATED tag',
+        ok: hasTag,
+        warnOnly: true,
+        detail: hasTag ? 'exists' : `missing; create it once with: logseq upsert tag --graph="${config.graph}" --name=AI-GENERATED`,
+      });
+    }
+
     const helpParts: string[] = [];
     const top = await cli.runDiagnostic(['--help']);
     helpParts.push(`=== logseq --help\n${top.stdout}${top.stderr}`);

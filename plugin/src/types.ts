@@ -30,7 +30,26 @@ export type BridgeEvent = {
   data: Record<string, unknown>;
 };
 
-export type ChatState = { chat: ChatMeta; messages: StoredMessage[]; busy: boolean; lastSeq: number; epoch: string };
+export type PreviewBody =
+  | { kind: 'blocks'; text: string }
+  | { kind: 'diff'; before: string; after: string }
+  | { kind: 'remove'; text: string }
+  | { kind: 'text'; text: string };
+
+/** A write waiting for Apply/Reject (see bridge/src/approvals.ts). */
+export type ApprovalView = {
+  id: string;
+  chatId: string;
+  turnId: string;
+  tool: string;
+  title: string;
+  target: string;
+  body: PreviewBody;
+  warnings: string[];
+  createdAt: number;
+};
+
+export type ChatState = { chat: ChatMeta; messages: StoredMessage[]; busy: boolean; lastSeq: number; epoch: string; approvals?: ApprovalView[] };
 
 /** What the panel needs from Logseq (real implementation in main.ts, a fake in tests). */
 export type EditorPort = {

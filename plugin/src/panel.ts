@@ -1,7 +1,7 @@
 import { BridgeError } from './bridge';
 import type { BridgeClient, ConnState } from './bridge';
 import { renderMarkdown } from './render';
-import type { BridgeEvent, ChatMeta, Effort, EditorPort, ProviderInfo, StoredMessage } from './types';
+import type { ApprovalView, BridgeEvent, ChatMeta, Effort, EditorPort, ProviderInfo, StoredMessage } from './types';
 
 /**
  * The chat panel UI. Built with createElement/textContent only (see render.ts for the rules).
@@ -65,6 +65,7 @@ export class Panel {
   #busy = false;
   #page: { uuid: string; title: string; kind: 'page' | 'block' } | null = null;
   #pinned = new Map<string, string>();
+  #cards = new Map<string, { root: HTMLElement; status: HTMLElement; buttons: HTMLButtonElement[] }>();
   #destroyed = false;
 
   constructor(root: HTMLElement, deps: PanelDeps) {
@@ -361,6 +362,7 @@ export class Panel {
     this.#els.log.replaceChildren();
     for (const m of state.messages) this.#renderStored(m);
     if (state.busy) this.#ensureLive(undefined).dots.textContent = 'A reply is in progress…';
+    for (const a of state.approvals ?? []) this.#approvalCard(a);
     this.#scroll(true);
     this.#unsub = b.subscribe(id, state.lastSeq, (ev) => this.#onEvent(id, ev), (s) => this.#conn(s));
   }
@@ -502,6 +504,31 @@ export class Panel {
         }
         break;
       }
+      case 'tool.waiting': {
+        const live = this.#ensureLive(ev.turnId);
+        live.dots.hidden = false;
+        live.dots.textContent = 'Waiting for your approval…';
+        break;
+      }
+      case 'approval.request': {
+        this.#approvalCard(ev.data as unknown as ApprovalView);
+        break;
+      }
+      case 'approval.resolved': {
+        const card = this.#cards.get(String(ev.data.id));
+        if (card) {
+          const outcome = String(ev.data.outcome);
+          card.status.textContent =
+            outcome === 'applied' ? `✓ Applied: ${String(ev.data.detail ?? '')}` : outcome === 'failed' ? `✗ Failed: ${String(ev.data.detail ?? '')}` : '✗ Not applied';
+          card.root.classList.add(`lsai-card-${outcome}`);
+          for (const b of card.buttons) b.disabled = true;
+          card.root.querySelector('.lsai-note')?.setAttribute('disabled', 'true');
+        }
+        if (this.#live) {
+          this.#live.dots.textContent = '…';
+        }
+        break;
+      }
       case 'notice': {
         const target = this.#live?.root ?? this.#els.log;
         target.appendChild(this.#h('div', 'lsai-notice', String(ev.data.message ?? '')));
@@ -530,6 +557,57 @@ export class Panel {
         break;
     }
     this.#scroll(near);
+  }
+
+  // ---------- approval cards ----------
+
+  #pre(cls: string, text: string): HTMLElement {
+    return this.#h('pre', `lsai-card-pre ${cls}`, text);
+  }
+
+  #approvalCard(a: ApprovalView): void {
+    if (this.#cards.has(a.id)) return;
+    const root = this.#h('div', 'lsai-card');
+    root.appendChild(this.#h('div', 'lsai-card-title', a.title));
+    root.appendChild(this.#h('div', 'lsai-card-target', a.target));
+    const b = a.body;
+    if (b.kind === 'diff') {
+      root.appendChild(this.#h('div', 'lsai-card-label', 'Before'));
+      root.appendChild(this.#pre('lsai-before', b.before));
+      root.appendChild(this.#h('div', 'lsai-card-label', 'After'));
+      root.appendChild(this.#pre('lsai-after', b.after));
+    } else {
+      root.appendChild(this.#pre(b.kind === 'remove' ? 'lsai-remove' : '', b.text));
+    }
+    if (a.warnings.length > 0) {
+      const ul = this.#h('ul', 'lsai-warnings');
+      for (const w of a.warnings) ul.appendChild(this.#h('li', undefined, `⚠ ${w}`));
+      root.appendChild(ul);
+    }
+    const note = this.#h('input', 'lsai-note');
+    note.type = 'text';
+    note.placeholder = 'Note for the AI if you reject (optional)';
+    const status = this.#h('div', 'lsai-card-status', 'Nothing is written until you click Apply.');
+    const decide = async (decision: 'apply' | 'reject'): Promise<void> => {
+      for (const x of buttons) x.disabled = true;
+      status.textContent = decision === 'apply' ? 'Applying…' : 'Rejecting…';
+      try {
+        await this.#d.bridge?.decide(a.id, decision, decision === 'reject' ? note.value.trim() : undefined);
+      } catch (err) {
+        status.textContent = `Could not send your answer: ${(err as Error).message}`;
+        for (const x of buttons) x.disabled = false;
+      }
+    };
+    const reject = this.#button('lsai-reject', 'Reject', 'Do not make this change', () => void decide('reject'));
+    const apply = this.#button('lsai-apply', a.tool === 'remove_block' ? 'Delete' : 'Apply', 'Make this change in your graph', () => void decide('apply'));
+    const buttons = [reject, apply];
+    const actions = this.#h('div', 'lsai-card-actions');
+    actions.append(note, reject, apply);
+    root.append(actions, status);
+    const target = this.#live?.root ?? this.#els.log;
+    target.appendChild(root);
+    this.#cards.set(a.id, { root, status, buttons });
+    this.#scroll(true);
   }
 
   #nearBottom(): boolean {

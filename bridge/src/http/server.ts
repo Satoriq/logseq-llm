@@ -10,6 +10,7 @@ import { sseFrame } from '../events.ts';
 import { log } from '../log.ts';
 import { isEffort } from '../providers/types.ts';
 import type { McpEndpoint } from '../mcp/endpoint.ts';
+import type { Approvals } from '../approvals.ts';
 
 /**
  * HTTP API on 127.0.0.1. Checks, in order, for every request:
@@ -28,6 +29,7 @@ export type ServerDeps = {
   turns: TurnRunner;
   /** MCP endpoint for `claude -p` (per-process tokens). Optional so tests can omit it. */
   mcp?: McpEndpoint;
+  approvals?: Approvals;
 };
 
 const MAX_BODY = 1024 * 1024;
@@ -245,6 +247,18 @@ export function createBridgeServer(deps: ServerDeps): Server {
       return;
     }
 
+    if (a === 'approvals' && parts.length === 3 && method === 'POST') {
+      requireScope(scope, 'plugin');
+      if (id === undefined || !UUID_RE.test(id)) throw new HttpError(404, 'approval not found');
+      const body = await readJson(req);
+      const decision = body.decision;
+      if (decision !== 'apply' && decision !== 'reject') throw new HttpError(400, '"decision" must be "apply" or "reject"');
+      const note = optionalString(body, 'note', 2000);
+      if (!deps.approvals?.decide(id.toLowerCase(), decision, note)) throw new HttpError(404, 'approval not found (already answered or expired)');
+      send(res, 200, { ok: true }, cors);
+      return;
+    }
+
     if (a === 'chats') {
       requireScope(scope, 'plugin');
       if (parts.length === 2) {
@@ -264,7 +278,14 @@ export function createBridgeServer(deps: ServerDeps): Server {
       if (!chat) throw new HttpError(404, 'chat not found');
 
       if (parts.length === 3 && method === 'GET') {
-        send(res, 200, { chat, messages: await deps.store.messages(id), busy: deps.turns.isBusy(id), lastSeq: deps.turns.eventLog(id).lastSeq, epoch: deps.turns.epoch }, cors);
+        send(res, 200, {
+          chat,
+          messages: await deps.store.messages(id),
+          busy: deps.turns.isBusy(id),
+          lastSeq: deps.turns.eventLog(id).lastSeq,
+          epoch: deps.turns.epoch,
+          approvals: deps.approvals?.pending(id) ?? [],
+        }, cors);
         return;
       }
       if (parts.length === 4 && b === 'messages' && method === 'POST') {

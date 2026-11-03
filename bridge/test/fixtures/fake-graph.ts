@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import type { CliRequest, CliResult } from '../../src/tools/cli.ts';
 
 /**
@@ -45,11 +46,15 @@ export function sampleEntities(): E[] {
     { id: 207, uuid: u(207), title: 'Buy apples', page: 197, parent: 197, order: 'a0', status: 'Todo' },
     { id: 210, uuid: u(210), title: 'Nov 3rd, 2026', name: 'nov 3rd, 2026', journalDay: 20261103 },
     { id: 211, uuid: u(211), title: 'Journal apples entry', page: 210, parent: 210, order: 'a0' },
+    { id: 212, uuid: u(212), title: 'Visible parent', page: 194, parent: 194, order: 'a6' },
+    { id: 213, uuid: u(213), title: 'Private child #private', page: 194, parent: 212, order: 'a0', tags: [195] },
   ];
 }
 
 export type FakeOptions = {
   entities?: E[];
+  /** Whether the AI-GENERATED tag exists (needed for writes). */
+  aiTag?: boolean;
   /** owner-source reported for the graph in `server list`. */
   owner?: string;
   graph?: string;
@@ -60,11 +65,29 @@ export class FakeLogseq {
   readonly calls: CliRequest[] = [];
   owner: string;
   graph: string;
+  #nextId = 1000;
 
   constructor(opts: FakeOptions = {}) {
     this.byId = new Map((opts.entities ?? sampleEntities()).map((e) => [e.id, e]));
+    if (opts.aiTag !== false) this.byId.set(300, { id: 300, uuid: u(300), title: 'AI-GENERATED', name: 'ai-generated', ident: 'user.class/AI-GENERATED-x1' });
     this.owner = opts.owner ?? 'electron';
     this.graph = opts.graph ?? 'AI Sandbox';
+  }
+
+  /** Writes the fake applied (not dry runs). */
+  get writes(): CliRequest[] {
+    return this.calls.filter((c) => ['upsert block', 'upsert task', 'upsert page', 'remove block'].includes(c.command.join(' ')) && !c.options?.['dry-run']);
+  }
+
+  #new(e: Omit<E, 'id' | 'uuid'>): E {
+    const id = this.#nextId++;
+    const full: E = { id, uuid: u(id), ...e };
+    this.byId.set(id, full);
+    return full;
+  }
+
+  #pageByTitle(title: string): E | undefined {
+    return [...this.byId.values()].find((e) => e.name === title.toLowerCase() && e.page === undefined);
   }
 
   #pull(id: number, recursive: boolean): Record<string, unknown> | null {
@@ -145,6 +168,62 @@ export class FakeLogseq {
     if (cmd === 'search page') return this.#ok({ items: all.filter((e) => e.page === undefined && contains(e)).map((e) => ({ 'db/id': e.id, 'block/title': e.title })) });
     if (cmd === 'list task') return this.#ok({ items: all.filter((e) => e.status).map((e) => ({ id: e.id, title: e.title, status: e.status })) });
     if (cmd === 'list page') return this.#ok({ items: all.filter((e) => e.name && !e.ident).map((e) => ({ id: e.id, title: e.title })) });
+    if (cmd === 'search tag') return this.#ok({ items: all.filter((e) => e.ident?.startsWith('user.class/') && contains(e)).map((e) => ({ 'db/id': e.id, 'block/title': e.title })) });
+    if (req.command[0] === 'upsert' || req.command[0] === 'remove') {
+      assert.equal(req.allowWrite, true, 'writes must come from the approved-write path');
+      const tags = String(o['update-tags'] ?? '').includes('AI-GENERATED') ? [300] : [];
+      if (cmd === 'upsert block' && o['blocks-file']) {
+        const md = readFileSync(String(o['blocks-file']), 'utf8');
+        const lines = md.split('\n').filter((l) => /^\s*- /.test(l));
+        const titles = [...md.matchAll(/\[\[([^\]]+)\]\]/g)].map((m) => m[1] as string).filter((t) => !this.#pageByTitle(t));
+        if (o['dry-run']) return this.#ok({ 'dry-run': true, ops: [], 'would-create-pages': titles });
+        const parentE = o['target-page'] ? this.#pageByTitle(String(o['target-page'])) : all.find((e) => e.uuid === o['target-uuid']);
+        if (!parentE) return { ok: false, exitCode: 1, json: { status: 'error', error: { code: 'not-found', message: 'target not found' } }, stdout: '', stderr: '', durationMs: 1 };
+        const pageId = parentE.page ?? parentE.id;
+        const stack: { depth: number; id: number }[] = [];
+        const ids: number[] = [];
+        for (const l of lines) {
+          const depth = (l.match(/^\s*/)?.[0].length ?? 0) / 2;
+          while (stack.length && (stack.at(-1) as { depth: number }).depth >= depth) stack.pop();
+          const parent = stack.at(-1)?.id ?? (o.pos === 'sibling' ? (parentE.parent ?? pageId) : parentE.id);
+          const e = this.#new({ title: l.replace(/^\s*- /, ''), page: pageId, parent, order: 'z' + ids.length, tags });
+          ids.push(e.id);
+          stack.push({ depth, id: e.id });
+        }
+        return this.#ok({ result: ids });
+      }
+      if (cmd === 'upsert block' && o.uuid) {
+        const e = all.find((x) => x.uuid === o.uuid);
+        if (!e) return { ok: false, exitCode: 1, json: null, stdout: '', stderr: 'not found', durationMs: 1 };
+        e.title = String(o.content);
+        e.tags = [...new Set([...(e.tags ?? []), ...tags])];
+        return this.#ok({ result: [e.id] });
+      }
+      if (cmd === 'upsert block' && o.id) {
+        const e = this.byId.get(Number(o.id));
+        if (e) e.tags = [...new Set([...(e.tags ?? []), ...tags])];
+        return this.#ok({ result: [Number(o.id)] });
+      }
+      if (cmd === 'upsert task') {
+        const parentE = o['target-page'] ? this.#pageByTitle(String(o['target-page'])) : all.find((e) => e.uuid === o['target-uuid']);
+        const pageId = parentE?.page ?? parentE?.id ?? 0;
+        const e = this.#new({ title: String(o.content), page: pageId, parent: parentE?.id ?? pageId, order: 'zz', status: String(o.status) });
+        return this.#ok({ result: [e.id] });
+      }
+      if (cmd === 'upsert page') {
+        const e = this.#new({ title: String(o.page), name: String(o.page).toLowerCase(), tags });
+        return this.#ok({ result: [e.id] });
+      }
+      if (cmd === 'remove block') {
+        const root = all.find((e) => e.uuid === o.uuid);
+        const drop = (id: number): void => {
+          for (const k of [...this.byId.values()].filter((x) => x.parent === id)) drop(k.id);
+          this.byId.delete(id);
+        };
+        if (root) drop(root.id);
+        return this.#ok({ result: root ? [root.id] : [] });
+      }
+    }
     throw new Error(`fake logseq: unexpected command ${cmd}`);
   };
 }

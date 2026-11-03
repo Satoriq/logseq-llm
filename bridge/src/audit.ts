@@ -19,6 +19,8 @@ export type AuditEntry = {
   hiddenCount?: number;
   tool?: string;
   outcome?: string;
+  /** Blocks/pages a write touched (ids only). */
+  targetUuids?: string[];
 };
 
 export class AuditLog {
