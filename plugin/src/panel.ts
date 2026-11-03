@@ -361,7 +361,12 @@ export class Panel {
     this.#epoch = state.epoch;
     this.#els.log.replaceChildren();
     for (const m of state.messages) this.#renderStored(m);
-    if (state.busy) this.#ensureLive(undefined).dots.textContent = 'A reply is in progress…';
+    if (state.busy) {
+      // Reopened while a reply is running: keep Stop available and say what it's waiting for.
+      this.#setBusy(true);
+      const waiting = (state.approvals ?? []).length > 0;
+      this.#ensureLive(undefined).dots.textContent = waiting ? 'Waiting for your approval (see the card below)…' : 'A reply is in progress…';
+    }
     for (const a of state.approvals ?? []) this.#approvalCard(a);
     this.#scroll(true);
     this.#unsub = b.subscribe(id, state.lastSeq, (ev) => this.#onEvent(id, ev), (s) => this.#conn(s));
