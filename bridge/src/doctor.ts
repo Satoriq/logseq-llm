@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { BridgeConfig, DataPaths } from './config.ts';
 import { MIN_NODE_MAJOR } from './config.ts';
 import { LogseqCli } from './tools/cli.ts';
+import type { CliResult } from './tools/cli.ts';
 
 /**
  * Read-only diagnostics. Nothing here writes to a graph or changes a setting.
@@ -25,6 +26,49 @@ const CLI_COMMANDS_USED: Record<string, string[]> = {
   'upsert task': ['--status', '--content', '--target-page'],
   'remove block': ['--uuid'],
 };
+
+const SAMPLE_BLOCKS_QUERY =
+  '[:find (pull ?b [* {:block/tags [:db/id :db/ident :block/title]} {:block/refs [:db/id :block/title]}]) :in $ ?t :where [?p :block/title ?t] [?b :block/page ?p]]';
+const SAMPLE_PROPERTIES_QUERY =
+  '[:find (pull ?e [:db/id :db/ident :block/title :logseq.property/type]) :where [?e :db/ident ?i] [(namespace ?i) ?ns] [(= ?ns "user.property")]]';
+const SAMPLE_VALUES_QUERY = '[:find (pull ?e [:db/id :db/ident :block/title]) :in $ [?e ...]]';
+
+/** An EDN string literal. JSON's escapes (\" \\ \n \t \uXXXX) are valid EDN for ordinary text. */
+export function ednString(s: string): string {
+  return JSON.stringify(s);
+}
+
+/** Collects entity ids referenced from user-property attributes anywhere in a CLI JSON result. */
+export function userPropertyRefIds(json: unknown): number[] {
+  const ids = new Set<number>();
+  const idOf = (v: unknown): number | null => {
+    if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+      const o = v as Record<string, unknown>;
+      const id = o['db/id'] ?? o[':db/id'];
+      if (typeof id === 'number' && Number.isInteger(id)) return id;
+    }
+    return null;
+  };
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) {
+      for (const x of v) walk(x);
+      return;
+    }
+    if (v === null || typeof v !== 'object') return;
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (/^:?user\.property\//.test(k)) {
+        for (const item of Array.isArray(val) ? val : [val]) {
+          const id = idOf(item);
+          if (id !== null) ids.add(id);
+          else if (typeof item === 'number' && Number.isInteger(item)) ids.add(item);
+        }
+      }
+      walk(val);
+    }
+  };
+  walk(json);
+  return [...ids];
+}
 
 const CLAUDE_FLAGS_NEEDED = [
   '--print',
@@ -173,7 +217,7 @@ export async function runDoctor(opts: DoctorOptions): Promise<boolean> {
     out(`      saved CLI help to ${helpFile}`);
 
     const graphLabel = config.graph === null ? "the CLI's current graph" : `graph "${config.graph}"`;
-    const sample = async (name: string, file: string, req: Parameters<LogseqCli['run']>[0]): Promise<void> => {
+    const sample = async (name: string, file: string, req: Parameters<LogseqCli['run']>[0]): Promise<CliResult> => {
       const r = await cli.run(req);
       const f = join(paths.doctor, file);
       await writeFile(f, r.stdout || r.stderr, { mode: 0o600 });
@@ -187,9 +231,27 @@ export async function runDoctor(opts: DoctorOptions): Promise<boolean> {
           ? `${f} from ${graphLabel} (contains note text: share only if harmless)`
           : `exit ${r.exitCode} on ${graphLabel}: ${reason} (output saved to ${f})`,
       });
+      return r;
     };
     if (opts.samplePage !== undefined) {
-      await sample('sample show', 'sample-show.json', { command: ['show'], graph: config.graph, options: { page: opts.samplePage, level: 2 } });
+      const graph = config.graph;
+      await sample('sample show', 'sample-show.json', { command: ['show'], graph, options: { page: opts.samplePage, level: 2 } });
+      // `show` doesn't include user properties, so also pull the raw block entities. Step 1b reads
+      // tags and properties this way for the privacy filter. The title goes in --inputs, never into the query text.
+      const blocks = await sample('sample query blocks', 'sample-query-blocks.json', {
+        command: ['query'],
+        graph,
+        options: { query: SAMPLE_BLOCKS_QUERY, inputs: `[${ednString(opts.samplePage)}]` },
+      });
+      await sample('sample query properties', 'sample-query-properties.json', { command: ['query'], graph, options: { query: SAMPLE_PROPERTIES_QUERY } });
+      const ids = userPropertyRefIds(blocks.json).slice(0, 200);
+      if (ids.length > 0) {
+        await sample('sample query values', 'sample-query-values.json', {
+          command: ['query'],
+          graph,
+          options: { query: SAMPLE_VALUES_QUERY, inputs: `[[${ids.join(' ')}]]` },
+        });
+      }
     }
     if (opts.sampleSearch !== undefined) {
       await sample('sample search', 'sample-search.json', { command: ['search', 'block'], graph: config.graph, options: { content: opts.sampleSearch } });

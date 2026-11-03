@@ -22,3 +22,14 @@ test('doctor reports who serves the graph and background CLI workers; samples on
   assert.match(find('sample show'), /^warn .*simulated failure/);
   assert.match(find('claude binary'), /^FAIL/);
 });
+
+test('ednString and userPropertyRefIds', async () => {
+  const { ednString, userPropertyRefIds } = await import('../src/doctor.ts');
+  assert.equal(ednString('AI "Test"\n'), '"AI \\"Test\\"\\n"');
+  const sample = {
+    status: 'ok',
+    data: [[{ 'db/id': 1, 'user.property/ai-access-x1': { 'db/id': 42 }, 'block/tags': [{ 'db/id': 7 }] }],
+      [{ ':db/id': 2, ':user.property/topic-y': [{ ':db/id': 43 }, { ':db/id': 44 }] }]],
+  };
+  assert.deepEqual(userPropertyRefIds(sample).sort(), [42, 43, 44]);
+});

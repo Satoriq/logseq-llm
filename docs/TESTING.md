@@ -65,7 +65,7 @@ and word.
 node bin/logseq-ai-bridge.ts doctor --sample-page "Logseq AI" --sample-search "blacklists"
 ```
 
-This writes `doctor/sample-show.json` and `doctor/sample-search.json`. They
+This writes `doctor/sample-show.json`, `doctor/sample-search.json` and `doctor/sample-query-*.json`. The query files are the raw block entities, which show how tags and properties are stored. They
 contain the text of that page and those search hits, so only send them if
 that's fine.
 
