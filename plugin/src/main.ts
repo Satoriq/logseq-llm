@@ -121,8 +121,10 @@ const editor: EditorPort = {
   currentPage: async () => {
     const p = (await logseq.Editor.getCurrentPage()) as (Record<string, unknown> & { uuid?: string }) | null;
     if (!p?.uuid) return null;
-    const title = String(p.title ?? p.originalName ?? p.name ?? '');
-    return { uuid: String(p.uuid), title };
+    // getCurrentPage returns a block when you've zoomed into one.
+    const kind = p.page ? 'block' : 'page';
+    const title = kind === 'block' ? blockTitle(p as unknown as BlockEntity) : String(p.title ?? p.originalName ?? p.name ?? '');
+    return { uuid: String(p.uuid), title, kind };
   },
 };
 

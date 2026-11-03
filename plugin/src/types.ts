@@ -37,8 +37,8 @@ export type EditorPort = {
   openPage: (title: string) => void;
   openBlock: (uuid: string) => void;
   openExternal: (url: string) => void;
-  /** The page currently shown in the main view, if any. */
-  currentPage: () => Promise<{ uuid: string; title: string } | null>;
+  /** What the main view shows: a page, or a block you zoomed into. */
+  currentPage: () => Promise<{ uuid: string; title: string; kind: 'page' | 'block' } | null>;
 };
 
 export type PanelSide = 'right' | 'left' | 'top' | 'bottom';

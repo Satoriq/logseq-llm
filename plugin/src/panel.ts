@@ -63,7 +63,7 @@ export class Panel {
   #unsub: (() => void) | null = null;
   #live: Live | null = null;
   #busy = false;
-  #page: { uuid: string; title: string } | null = null;
+  #page: { uuid: string; title: string; kind: 'page' | 'block' } | null = null;
   #pinned = new Map<string, string>();
   #destroyed = false;
 
@@ -196,7 +196,7 @@ export class Panel {
   }
 
   /** Called on route changes: the page chip follows the page you're viewing. */
-  setCurrentPage(page: { uuid: string; title: string } | null): void {
+  setCurrentPage(page: { uuid: string; title: string; kind: 'page' | 'block' } | null): void {
     this.#page = page;
     this.#renderChips();
   }
@@ -265,7 +265,12 @@ export class Panel {
   #fillProviders(): void {
     const { provider } = this.#els;
     provider.replaceChildren();
-    for (const p of this.#providers) this.#option(provider, p.id, `${p.label} · ${p.locality}`);
+    for (const p of this.#providers) {
+      // "Claude (Pro, claude CLI)" → "Claude · cloud"; the full label is the tooltip.
+      this.#option(provider, p.id, `${p.label.replace(/\s*\([^)]*\)/g, '')} · ${p.locality}`);
+      const o = provider.lastElementChild as HTMLOptionElement | null;
+      if (o) o.title = p.label;
+    }
     const pref = this.#d.prefs.get().provider;
     provider.value = this.#providers.some((p) => p.id === pref) ? (pref as string) : (this.#providers[0]?.id ?? '');
     this.#fillModels();
@@ -305,7 +310,9 @@ export class Panel {
     c.replaceChildren();
     const includePage = this.#d.prefs.get().includePage !== false;
     if (this.#page) {
-      const b = this.#button(`lsai-ctx${includePage ? ' lsai-on' : ''}`, `📄 ${this.#page.title}`, includePage ? 'This page is sent as context (click to stop)' : 'Click to send this page as context', () => {
+      const what = this.#page.kind === 'block' ? 'zoomed-in block' : 'page';
+      const label = `${this.#page.kind === 'block' ? '▦' : '📄'} ${this.#page.title.slice(0, 50) || what}`;
+      const b = this.#button(`lsai-ctx${includePage ? ' lsai-on' : ''}`, label, includePage ? `This ${what} is sent as context (click to stop)` : `Click to send this ${what} as context`, () => {
         this.#d.prefs.set({ includePage: !includePage });
         this.#renderChips();
       });

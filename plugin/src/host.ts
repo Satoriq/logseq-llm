@@ -51,9 +51,13 @@ export function mountPanel(doc: Document, opts: { side: PanelSide; size: number;
     }
   };
 
+  const html = doc.documentElement;
   const apply = (): void => {
     root.className = `lsai-side-${side}${visible ? '' : ' lsai-hidden'}`;
     root.style.setProperty('--lsai-size', `${size}px`);
+    // Lets our CSS move Logseq's bottom-right help button out from under the panel.
+    html.classList.toggle('lsai-open-right', visible && side === 'right');
+    html.style.setProperty('--lsai-panel-size', `${size}px`);
     place();
   };
 
@@ -82,6 +86,7 @@ export function mountPanel(doc: Document, opts: { side: PanelSide; size: number;
       const max = side === 'left' || side === 'right' ? win.innerWidth * 0.8 : win.innerHeight * 0.85;
       size = Math.round(Math.max(260, Math.min(max, start.size + delta)));
       root.style.setProperty('--lsai-size', `${size}px`);
+      html.style.setProperty('--lsai-panel-size', `${size}px`);
     };
     const up = (): void => {
       handle.removeEventListener('pointermove', move);
@@ -107,6 +112,8 @@ export function mountPanel(doc: Document, opts: { side: PanelSide; size: number;
     destroy: () => {
       observer.disconnect();
       root.remove();
+      html.classList.remove('lsai-open-right');
+      html.style.removeProperty('--lsai-panel-size');
     },
   };
 }

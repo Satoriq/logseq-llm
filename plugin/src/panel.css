@@ -2,13 +2,15 @@
    so it follows light/dark mode and custom themes. */
 
 #lsai-panel {
-  --lsai-bg: var(--ls-primary-background-color, #fff);
-  --lsai-bg2: var(--ls-secondary-background-color, #f4f5f7);
-  --lsai-bg3: var(--ls-tertiary-background-color, #e9ebef);
-  --lsai-fg: var(--ls-primary-text-color, #1f2328);
-  --lsai-fg2: var(--ls-secondary-text-color, #5b6270);
-  --lsai-border: var(--ls-border-color, #d8dbe0);
-  --lsai-link: var(--ls-link-text-color, #2563eb);
+  /* Classic themes set --ls-*; Logseq 2.0's default themes only set the shadcn tokens
+     (--background, --foreground, ... as HSL triplets) and the --lx-* scales. */
+  --lsai-bg: var(--ls-primary-background-color, hsl(var(--background, 0 0% 100%)));
+  --lsai-bg2: var(--ls-secondary-background-color, hsl(var(--secondary, 240 4.8% 95.9%)));
+  --lsai-bg3: var(--ls-tertiary-background-color, var(--lx-gray-04, hsl(var(--muted, 240 4.8% 92%))));
+  --lsai-fg: var(--ls-primary-text-color, hsl(var(--foreground, 222.2 84% 4.9%)));
+  --lsai-fg2: var(--ls-secondary-text-color, var(--lx-gray-11, #6b7280));
+  --lsai-border: var(--ls-border-color, hsl(var(--border, 214.3 31.8% 91.4%)));
+  --lsai-link: var(--ls-link-text-color, var(--lx-accent-11, #3b82f6));
   --lsai-good: #16a34a;
   --lsai-bad: #dc2626;
 
@@ -37,6 +39,9 @@
 }
 #lsai-panel.lsai-side-right { border-left: 1px solid var(--lsai-border); }
 #lsai-panel.lsai-side-left { order: -1; border-right: 1px solid var(--lsai-border); }
+/* Logseq's round "?" help button is fixed at the bottom right: move it left of the panel. */
+html.lsai-open-right .cp__sidebar-help-btn { right: calc(var(--lsai-panel-size, 420px) + 16px) !important; }
+
 /* Keep clear of the macOS window buttons when the panel is on the left. */
 html.is-mac #lsai-panel.lsai-side-left .lsai-head { padding-top: 40px; }
 
