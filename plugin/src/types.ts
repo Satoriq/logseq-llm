@@ -48,8 +48,10 @@ export type ApprovalView = {
   body: PreviewBody;
   warnings: string[];
   createdAt: number;
-  /** Applied without waiting, because of this graph's autoApply setting. */
+  /** Applied without a click: autoApply, or "Apply all" earlier in this answer. */
   auto?: boolean;
+  /** Edits/deletes applied without a click wait this long first, so you can Abort. */
+  graceMs?: number;
 };
 
 export type ChatState = { chat: ChatMeta; messages: StoredMessage[]; busy: boolean; lastSeq: number; epoch: string; approvals?: ApprovalView[] };

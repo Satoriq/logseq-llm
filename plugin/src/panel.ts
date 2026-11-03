@@ -1,8 +1,9 @@
 import { BridgeError } from './bridge';
 import type { BridgeClient, ConnState } from './bridge';
+import { ChangeCards } from './changes';
 import { renderMarkdown } from './render';
 import { PANEL_VERSION } from './version';
-import type { ApprovalView, BridgeEvent, ChatMeta, Effort, EditorPort, ProviderInfo, StoredMessage } from './types';
+import type { BridgeEvent, ChatMeta, Effort, EditorPort, ProviderInfo, StoredMessage } from './types';
 
 /**
  * The chat panel UI. Built with createElement/textContent only (see render.ts for the rules).
@@ -67,13 +68,14 @@ export class Panel {
   #busy = false;
   #page: { uuid: string; title: string; kind: 'page' | 'block' } | null = null;
   #pinned = new Map<string, string>();
-  #cards = new Map<string, { root: HTMLElement; status: HTMLElement; buttons: HTMLButtonElement[]; title: string }>();
+  #changes: ChangeCards;
   #destroyed = false;
 
   constructor(root: HTMLElement, deps: PanelDeps) {
     this.root = root;
     this.#d = deps;
     this.#doc = deps.doc;
+    this.#changes = new ChangeCards({ doc: deps.doc, bridge: () => this.#d.bridge, onChange: () => this.#scroll(true) });
     this.#build();
   }
 
@@ -193,6 +195,7 @@ export class Panel {
   destroy(): void {
     this.#destroyed = true;
     this.#unsub?.();
+    this.#changes.clear();
   }
 
   focus(): void {
@@ -370,7 +373,7 @@ export class Panel {
       const waiting = (state.approvals ?? []).length > 0;
       this.#ensureLive(undefined).dots.textContent = waiting ? 'Waiting for your approval (see the card below)…' : 'A reply is in progress…';
     }
-    for (const a of state.approvals ?? []) this.#approvalCard(a);
+    for (const a of state.approvals ?? []) this.#changes.show(a, this.#live?.root ?? this.#els.log);
     this.#scroll(true);
     this.#unsub = b.subscribe(id, state.lastSeq, (ev) => this.#onEvent(id, ev), (s) => this.#conn(s));
   }
@@ -470,6 +473,11 @@ export class Panel {
     }
     this.#epoch = ev.epoch || this.#epoch;
     const near = this.#nearBottom();
+    if (this.#changes.onEvent(ev, () => this.#ensureLive(ev.turnId).root)) {
+      if (ev.type === 'approval.resolved' && this.#live) this.#live.dots.textContent = '…';
+      this.#scroll(near);
+      return;
+    }
     switch (ev.type) {
       case 'turn.start': {
         this.#setBusy(true);
@@ -518,34 +526,6 @@ export class Panel {
         live.dots.textContent = 'Waiting for your approval…';
         break;
       }
-      case 'approval.request': {
-        this.#approvalCard(ev.data as unknown as ApprovalView);
-        break;
-      }
-      case 'approval.resolved': {
-        const card = this.#cards.get(String(ev.data.id));
-        if (card) {
-          const outcome = String(ev.data.outcome);
-          const auto = card.root.classList.contains('lsai-card-auto');
-          const detail = String(ev.data.detail ?? '');
-          card.status.textContent = auto
-            ? outcome === 'applied'
-              ? `✓ Auto-applied · ${card.title}`
-              : `✗ Failed · ${card.title}: ${detail}`
-            : outcome === 'applied'
-              ? `✓ Applied: ${detail}`
-              : outcome === 'failed'
-                ? `✗ Failed: ${detail}`
-                : '✗ Not applied';
-          card.root.classList.add(`lsai-card-${outcome}`);
-          for (const b of card.buttons) b.disabled = true;
-          card.root.querySelector('.lsai-note')?.setAttribute('disabled', 'true');
-        }
-        if (this.#live) {
-          this.#live.dots.textContent = '…';
-        }
-        break;
-      }
       case 'notice': {
         const target = this.#live?.root ?? this.#els.log;
         target.appendChild(this.#h('div', 'lsai-notice', String(ev.data.message ?? '')));
@@ -577,78 +557,6 @@ export class Panel {
   }
 
   // ---------- approval cards ----------
-
-  #pre(cls: string, text: string): HTMLElement {
-    return this.#h('pre', `lsai-card-pre ${cls}`, text);
-  }
-
-  #approvalCard(a: ApprovalView): void {
-    if (this.#cards.has(a.id)) return;
-    // The preview: target, what changes, warnings.
-    const details: HTMLElement[] = [this.#h('div', 'lsai-card-target', a.target)];
-    const b = a.body;
-    const pairs = b.kind === 'diffs' ? b.items : b.kind === 'diff' ? [{ before: b.before, after: b.after }] : null;
-    if (pairs) {
-      const box = this.#h('div', 'lsai-diffs');
-      for (const d of pairs) {
-        const pair = this.#h('div', 'lsai-diffpair');
-        pair.append(this.#pre('lsai-before', d.before), this.#pre('lsai-after', d.after));
-        box.appendChild(pair);
-      }
-      details.push(box);
-    } else if (b.kind === 'blocks' || b.kind === 'remove' || b.kind === 'text') {
-      details.push(this.#pre(b.kind === 'remove' ? 'lsai-remove' : '', b.text));
-    }
-    if (a.warnings.length > 0) {
-      const ul = this.#h('ul', 'lsai-warnings');
-      for (const w of a.warnings) ul.appendChild(this.#h('li', undefined, `⚠ ${w}`));
-      details.push(ul);
-    }
-    const root = this.#h('div', 'lsai-card');
-    const target = this.#live?.root ?? this.#els.log;
-
-    if (a.auto) {
-      // autoApply covers this change: one line of record, the preview behind "Show".
-      root.classList.add('lsai-card-auto');
-      const status = this.#h('span', 'lsai-card-status', `Applying · ${a.title}`);
-      const more = this.#h('details', 'lsai-card-more');
-      more.appendChild(this.#h('summary', undefined, 'Show'));
-      more.append(...details);
-      const line = this.#h('div', 'lsai-card-line');
-      line.append(status, more);
-      root.appendChild(line);
-      target.appendChild(root);
-      this.#cards.set(a.id, { root, status, buttons: [], title: a.title });
-      this.#scroll(true);
-      return;
-    }
-
-    root.appendChild(this.#h('div', 'lsai-card-title', a.title));
-    root.append(...details);
-    const note = this.#h('input', 'lsai-note');
-    note.type = 'text';
-    note.placeholder = 'Note for the AI if you reject (optional)';
-    const status = this.#h('div', 'lsai-card-status', 'Nothing is written until you click Apply.');
-    const decide = async (decision: 'apply' | 'reject'): Promise<void> => {
-      for (const x of buttons) x.disabled = true;
-      status.textContent = decision === 'apply' ? 'Applying…' : 'Rejecting…';
-      try {
-        await this.#d.bridge?.decide(a.id, decision, decision === 'reject' ? note.value.trim() : undefined);
-      } catch (err) {
-        status.textContent = `Could not send your answer: ${(err as Error).message}`;
-        for (const x of buttons) x.disabled = false;
-      }
-    };
-    const reject = this.#button('lsai-reject', 'Reject', 'Do not make this change', () => void decide('reject'));
-    const apply = this.#button('lsai-apply', a.tool === 'remove_block' ? 'Delete' : 'Apply', 'Make this change in your graph', () => void decide('apply'));
-    const buttons = [reject, apply];
-    const actions = this.#h('div', 'lsai-card-actions');
-    actions.append(note, reject, apply);
-    root.append(actions, status);
-    target.appendChild(root);
-    this.#cards.set(a.id, { root, status, buttons, title: a.title });
-    this.#scroll(true);
-  }
 
   #nearBottom(): boolean {
     const l = this.#els.log;

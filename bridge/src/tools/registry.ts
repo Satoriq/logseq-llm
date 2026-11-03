@@ -1,4 +1,4 @@
-import type { ApprovalRequest, ApprovalView, Decision } from '../approvals.ts';
+import type { ApprovalRequest, ApprovalView, Decision, Outcome } from '../approvals.ts';
 import type { Locality } from '../chats/store.ts';
 
 /** Provider-neutral tool definition. The same set goes to claude (MCP), the APIs and Ollama. */
@@ -15,7 +15,9 @@ export type ToolContext = {
   /** Shows an approval card and waits for Apply/Reject. Write tools refuse to run without it. */
   approve?: ApproveFn;
   /** Reports how an approval ended (shown on the card). */
-  resolved?: (view: ApprovalView, outcome: 'applied' | 'rejected' | 'failed', detail: string) => void;
+  resolved?: (view: ApprovalView, outcome: Outcome, detail: string) => void;
+  /** Progress of a batch being applied (shown on the card). */
+  progress?: (view: ApprovalView, done: number, total: number) => void;
 };
 
 export type ToolOutput = {

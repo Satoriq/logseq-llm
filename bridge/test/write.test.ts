@@ -315,3 +315,73 @@ test('autoApply "own": edits and deletes of blocks the AI added in this chat ski
   assert.match((await tool('remove_block').run({ uuid: '54f76cdd-307a-436e-9716-f129841c97e6' }, c)).text, /rejected/);
   assert.deepEqual(autos, [true, true, false, false, true, false]);
 });
+
+test('"Apply all": the rest of this answer is applied without asking; another answer still asks', async () => {
+  const logs = new Map<string, EventLog>();
+  const events = (id: string): EventLog => {
+    let l = logs.get(id);
+    if (!l) logs.set(id, (l = new EventLog('e')));
+    return l;
+  };
+  const a = new Approvals({ events, requireUi: false });
+  const req: ApprovalRequest = { tool: 'update_blocks', title: 't', target: 'g', body: { kind: 'text', text: 'b' }, warnings: ['a warning'] };
+  const first = a.request('c', 'turn-1', req);
+  a.decide(a.pending('c')[0]?.id as string, 'apply-all');
+  assert.equal((await first).decision.decision, 'apply');
+  const second = await a.request('c', 'turn-1', req);
+  assert.equal(second.decision.reason, 'auto', 'same answer: no card wait');
+  assert.equal(second.view.auto, true);
+  const other = a.request('c', 'turn-2', req);
+  assert.equal(a.pending('c').length, 1, 'a new answer asks again');
+  a.rejectAll('c', 'cancelled');
+  assert.equal((await other).decision.reason, 'cancelled');
+  assert.equal(a.isTrusted('turn-1'), false, 'turn end forgets "Apply all"');
+});
+
+test('auto edits wait a grace period and can be aborted in it', async () => {
+  const events = (() => {
+    const l = new EventLog('e');
+    return () => l;
+  })();
+  const a = new Approvals({ events, requireUi: false });
+  const req: ApprovalRequest = { tool: 'remove_block', title: 't', target: 'g', body: { kind: 'text', text: 'b' }, warnings: [], auto: true, graceMs: 300 };
+  const p = a.request('c', 't', req);
+  const id = events().since(0).events.find((e) => e.type === 'approval.request')?.data.id as string;
+  assert.equal(a.decide(id, 'abort'), true);
+  assert.equal((await p).decision.reason, 'aborted');
+  const t0 = Date.now();
+  const q = await a.request('c', 't', { ...req, graceMs: 60 });
+  assert.ok(Date.now() - t0 >= 50, 'waited the grace period');
+  assert.equal(q.decision.decision, 'apply');
+  assert.ok(q.decision.signal, 'apply comes with an abort signal for the running phase');
+});
+
+test('Abort during a batch stops the remaining edits and tells the model how many went in', async () => {
+  const { fake, tool } = await setup();
+  const ac = new AbortController();
+  const progress: string[] = [];
+  const c: ToolContext = {
+    locality: 'local',
+    chatId: 'c',
+    turnId: 't',
+    approve: async (req) => ({ view: { ...req, id: 'x', chatId: 'c', turnId: 't', createdAt: 0 }, decision: { decision: 'apply', reason: 'user', signal: ac.signal } }),
+    progress: (_v, done, total) => {
+      progress.push(`${done}/${total}`);
+      if (done === 1) ac.abort(); // the user clicks Abort after the first edit
+    },
+    resolved: (_v, outcome, detail) => progress.push(`${outcome}:${detail}`),
+  };
+  const out = await tool('update_blocks').run(
+    {
+      edits: [
+        { uuid: 'a558ac4e-ae05-43f3-af22-f167c5f56975', content: 'one' },
+        { uuid: '54f76cdd-307a-436e-9716-f129841c97e6', content: 'two' },
+        { uuid: '05c4b96b-5012-4826-a902-693efb290e0d', content: 'three' },
+      ],
+    },
+    c,
+  );
+  assert.match(out.text, /aborted this change: 1 of 3 edits had been applied/);
+  assert.equal(fake.writes.length, 1);
+  assert.deepEqual(progress, ['1/3', 'aborted:1 of 3 applied']);
+});

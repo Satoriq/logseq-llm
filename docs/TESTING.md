@@ -567,12 +567,31 @@ Try:
 - *"Change 'Apples are red' to 'Apples are green'."* That's your block, so you
   get the normal card with before/after.
 
+### 4c. "Apply all", Abort, progress, folding
+
+- **Apply all.** Every normal card has **Reject · Apply all · Apply**. Apply all
+  applies this change and every further change in **the same answer** without
+  asking, including edits and deletes of your own blocks. The next answer asks
+  again.
+- **Grace period and Abort.** An edit or delete applied without a click first
+  shows `⏳ … applying in 2s` with **Abort**. A batch shows `7/25`, and Abort
+  stops the rest. Claude is told exactly what went in.
+- **Folding.** A finished change folds to one line after 1 second. Click the
+  line to open or close it.
+- **Groups.** Two or more changes in one answer sit in a group,
+  `5 changes · ✓ 4 · ✗ 1`. It folds 1 second after the last one finishes and
+  opens or closes on click.
+
+Try it: *"Write a 4-line poem on AI Test, then make the first line of
+'Apples are red' bold."* On the first card, click **Apply all**. The edit then
+shows `applying in 2s`, and you can let it run or Abort it.
+
 ### Which build is running?
 
-The panel's status line shows `● Connected · panel 0.3.0 · bridge 0.3.0`. If
+The panel's status line shows `● Connected · panel 0.4.0 · bridge 0.4.0`. If
 it shows no version numbers, Logseq still runs an old plugin build. Run
 `npm run build` in `plugin/`, then switch the plugin off and on. Approval cards
-need panel ≥ 0.2.0; batched edits and compact auto-apply lines need 0.3.0.
+need panel ≥ 0.2.0; batched edits need 0.3.0; Apply all, Abort and folding need 0.4.0.
 
 If a write needs your approval and no up-to-date panel is open on that chat,
 the bridge doesn't wait. It tells Claude right away that nothing was changed,

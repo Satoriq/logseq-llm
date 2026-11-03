@@ -140,6 +140,7 @@ export class McpEndpoint {
                 return approvals.request(session.chatId, session.turnId, req);
               },
               resolved: (view, outcome, detail) => approvals.resolved(view, outcome, detail),
+              progress: (view, done, total) => approvals.progress(view, done, total),
             }
           : {}),
       });

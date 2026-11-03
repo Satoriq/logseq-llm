@@ -60,10 +60,26 @@ type Applied = {
   created?: string[];
 };
 
+/** Thrown when you Abort a batch part-way. */
+class AbortedApply extends Error {
+  readonly done: number;
+  readonly total: number;
+  constructor(done: number, total: number) {
+    super(`stopped after ${done} of ${total}`);
+    this.done = done;
+    this.total = total;
+  }
+}
+
+/** Auto-applied edits and deletes wait this long, so you can Abort them. */
+export const AUTO_GRACE_MS = 2000;
+
+type ApplyOpts = { signal?: AbortSignal; progress?: (done: number, total: number) => void };
+
 type Prepared = {
   approval: ApprovalRequest;
   /** Runs the change exactly as previewed. */
-  apply: () => Promise<Applied>;
+  apply: (o: ApplyOpts) => Promise<Applied>;
   cleanup?: () => Promise<void>;
   targetUuids: string[];
   /** For edits/deletes: the blocks that must all be the AI's own (this chat) for autoApply "own". */
@@ -202,8 +218,10 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
         auto = prepared.ownTargets.every((u) => mine.has(u.toLowerCase()));
       }
       try {
-        const { view, decision } = await ctx.approve({ ...prepared.approval, ...(auto ? { auto: true } : {}) });
-        const done = (outcome: 'applied' | 'rejected' | 'failed', detail: string, targetUuids: string[]): void => {
+        // Edits/deletes get a short window to Abort when they're applied without a click.
+        const graceMs = ADDITIONS.has(name) ? 0 : AUTO_GRACE_MS;
+        const { view, decision } = await ctx.approve({ ...prepared.approval, graceMs, ...(auto ? { auto: true } : {}) });
+        const done = (outcome: 'applied' | 'rejected' | 'failed' | 'aborted', detail: string, targetUuids: string[]): void => {
           ctx.resolved?.(view as ApprovalView, outcome, detail);
           void deps.audit?.record({ kind: 'write', chatId: ctx.chatId ?? 'cli', ...(ctx.turnId ? { turnId: ctx.turnId } : {}), tool: name, outcome, targetUuids, locality: ctx.locality });
         };
@@ -213,18 +231,33 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
               ? 'No answer from the user within the time limit; nothing was changed.'
               : decision.reason === 'no-panel'
                 ? "The user can't see approval cards right now (their Logseq AI panel isn't open on this chat or needs an update); nothing was changed. Tell them, and don't retry until they say so."
+              : decision.reason === 'aborted'
+                ? "The user aborted this change before it was applied; nothing was changed. Don't retry it unless they ask."
               : decision.reason === 'cancelled'
                 ? 'The user stopped this turn; nothing was changed.'
                 : `The user rejected this change; nothing was changed.${decision.note ? ` Their note: ${quote(decision.note, 500)}` : ''} Don't retry the same change unless they ask.`;
-          done('rejected', decision.reason === 'user' ? (decision.note ?? 'rejected') : (decision.reason ?? 'rejected'), prepared.targetUuids);
+          done(decision.reason === 'aborted' ? 'aborted' : 'rejected', decision.reason === 'user' ? (decision.note ?? 'rejected') : (decision.reason ?? 'rejected'), prepared.targetUuids);
           return { text: why, sentUuids: [], hiddenCount: 0 };
         }
         try {
-          const r = await prepared.apply();
+          if (decision.signal?.aborted) throw new AbortedApply(0, 1);
+          const r = await prepared.apply({
+            ...(decision.signal ? { signal: decision.signal } : {}),
+            progress: (n, total) => ctx.progress?.(view as ApprovalView, n, total),
+          });
           if (r.created?.length && ctx.chatId && deps.own) await deps.own.add(ctx.chatId, r.created);
           done('applied', r.short, r.targetUuids);
           return { text: `Applied: ${r.summary}`, sentUuids: [], hiddenCount: 0 };
         } catch (err) {
+          if (err instanceof AbortedApply) {
+            const detail = err.done === 0 ? 'nothing applied' : `${err.done} of ${err.total} applied`;
+            done('aborted', detail, prepared.targetUuids);
+            return {
+              text: `The user aborted this change: ${err.done === 0 ? 'nothing was changed' : `${err.done} of ${err.total} edits had been applied, the rest were not`}. Don't retry it unless they ask.`,
+              sentUuids: [],
+              hiddenCount: 0,
+            };
+          }
           const msg = (err as Error).message;
           done('failed', msg, prepared.targetUuids);
           return { text: `Logseq refused the change: ${msg}`, sentUuids: [], hiddenCount: 0 };
@@ -377,12 +410,14 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
         },
         targetUuids: uuids,
         ownTargets: uuids,
-        apply: async () => {
+        apply: async ({ signal, progress }) => {
           let doneCount = 0;
           for (const i of items) {
+            if (signal?.aborted) throw new AbortedApply(doneCount, n);
             const r = await run({ command: ['upsert', 'block'], graph, options: { uuid: (i.node.uuid as string).toLowerCase(), content: i.content, 'update-tags': `["${AI_TAG}"]` } });
             if (!r.ok) throw new Error(`${doneCount} of ${n} edits applied, then: ${cliMessage(r)}`);
             doneCount += 1;
+            progress?.(doneCount, n);
           }
           return { summary: `edited ${n} block(s): ${uuids.map((u) => `[id:${u}]`).join(', ')}`, short: `edited ${n} block${n === 1 ? '' : 's'}`, targetUuids: uuids };
         },

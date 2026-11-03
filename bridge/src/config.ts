@@ -4,7 +4,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { parseRule } from './policy/rules.ts';
 
 export const BRIDGE_NAME = 'logseq-ai-bridge';
-export const BRIDGE_VERSION = '0.3.0';
+export const BRIDGE_VERSION = '0.4.0';
 export const DEFAULT_PORT = 47615;
 export const MIN_NODE_MAJOR = 26;
 

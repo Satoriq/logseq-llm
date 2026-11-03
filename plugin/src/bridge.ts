@@ -107,7 +107,7 @@ export class BridgeClient {
     return this.#call('POST', `/v1/chats/${encodeURIComponent(id)}/messages`, input);
   }
 
-  decide(approvalId: string, decision: 'apply' | 'reject', note?: string): Promise<{ ok: boolean }> {
+  decide(approvalId: string, decision: 'apply' | 'reject' | 'apply-all' | 'abort', note?: string): Promise<{ ok: boolean }> {
     return this.#call('POST', `/v1/approvals/${encodeURIComponent(approvalId)}`, { decision, ...(note ? { note } : {}) });
   }
 

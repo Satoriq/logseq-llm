@@ -252,9 +252,11 @@ export function createBridgeServer(deps: ServerDeps): Server {
       if (id === undefined || !UUID_RE.test(id)) throw new HttpError(404, 'approval not found');
       const body = await readJson(req);
       const decision = body.decision;
-      if (decision !== 'apply' && decision !== 'reject') throw new HttpError(400, '"decision" must be "apply" or "reject"');
+      if (decision !== 'apply' && decision !== 'reject' && decision !== 'apply-all' && decision !== 'abort') {
+        throw new HttpError(400, '"decision" must be "apply", "reject", "apply-all" or "abort"');
+      }
       const note = optionalString(body, 'note', 2000);
-      if (!deps.approvals?.decide(id.toLowerCase(), decision, note)) throw new HttpError(404, 'approval not found (already answered or expired)');
+      if (!deps.approvals?.decide(id.toLowerCase(), decision, note)) throw new HttpError(404, 'approval not found (already answered or finished)');
       send(res, 200, { ok: true }, cors);
       return;
     }

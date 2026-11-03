@@ -56,6 +56,23 @@ if (prompt.includes('FAKE:write')) {
   const j = await r.json();
   text += ` write=${JSON.stringify(j.result.content[0].text)}`;
 }
+const call = async (name, args, id) => {
+  const r = await fetch(mcp.url, {
+    method: 'POST',
+    headers: { ...mcp.headers, 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }),
+  });
+  return (await r.json()).result.content[0].text;
+};
+if (prompt.includes('FAKE:twowrites')) {
+  text += ` first=${JSON.stringify(await call('insert_blocks', { page: 'AI Test', markdown: '- first change' }, 21))}`;
+  text += ` second=${JSON.stringify(await call('insert_blocks', { page: 'AI Test', markdown: '- second change' }, 22))}`;
+}
+if (prompt.includes('FAKE:addedit')) {
+  text += ` add=${JSON.stringify(await call('insert_blocks', { page: 'AI Test', markdown: '- an addition' }, 31))}`;
+  const edits = ['a558ac4e-ae05-43f3-af22-f167c5f56975', '54f76cdd-307a-436e-9716-f129841c97e6', '05c4b96b-5012-4826-a902-693efb290e0d'].map((uuid, i) => ({ uuid, content: `edited ${i}` }));
+  text += ` edit=${JSON.stringify(await call('update_blocks', { edits }, 32))}`;
+}
 if (prompt.includes('FAKE:error')) {
   out({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'boom', session_id: session });
   process.exit(1);
