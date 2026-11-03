@@ -180,6 +180,11 @@ export class LogseqCli {
     return this.#limiter.run(() => this.#exec(argv, timeout));
   }
 
+  /** `logseq server list` as JSON: which process serves each graph. */
+  serverList(): Promise<CliResult> {
+    return this.#limiter.run(() => this.#exec(['server', 'list', '--output=json'], this.#timeoutMs));
+  }
+
   /** For `doctor` only: a few fixed read-only commands and `--help` of allowed commands. */
   runDiagnostic(args: readonly string[]): Promise<CliResult> {
     const joined = args.join(' ');

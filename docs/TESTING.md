@@ -139,3 +139,102 @@ ls -la "$HOME/Library/Application Support/logseq-ai" "$HOME/Library/Application 
 
 Expected: directories `drwx------`, files `-rw-------`. `audit.jsonl` lists
 `turn.start`/`turn.end` with ids only, no message text.
+
+## Step 1b: read-only graph tools and the privacy filter
+
+New in this step:
+
+- read-only tools: `search_blocks`, `search_pages`, `get_page`, `get_block`,
+  `get_backlinks`, `list_tasks`, `list_pages`
+- the privacy filter: deny/allow rules, `#private`, `ai-access::`, and refs to
+  hidden things redacted as `[hidden]`
+- a guard that refuses to read a graph the Logseq app doesn't have open
+- `tool`: run one tool and see exactly what a model would get
+
+All of these only read. Keep **AI Sandbox** open in Logseq.
+
+### 1. Update and run the tests
+
+```bash
+cd "$HOME/logseq-llm/bridge" && git pull && node --test "test/**/*.test.ts"
+```
+
+Expected: `# pass 41`, `# fail 0`.
+
+### 2. What a cloud model would see (the default view)
+
+```bash
+node bin/logseq-ai-bridge.ts tool get_page '{"title":"AI Test"}'
+```
+
+Expected:
+
+- **Shown:** "Apples are red", the indented child block, and "See [[AI Test 2]]".
+- **Not shown:** "This one is secret #private" and "Local only note".
+- The last line reads `--- cloud view: … 2 hidden by the privacy filter`.
+
+### 3. What a local model would see
+
+```bash
+node bin/logseq-ai-bridge.ts tool get_page '{"title":"AI Test"}' --as local
+```
+
+Expected: all five blocks and `0 hidden`. The internal value block
+"local-only" is never listed as a block.
+
+### 4. Search
+
+```bash
+node bin/logseq-ai-bridge.ts tool search_blocks '{"query":"apples"}'
+```
+
+```bash
+node bin/logseq-ai-bridge.ts tool search_blocks '{"query":"secret"}'
+```
+
+Expected: the apples search finds both apple blocks with `(page "AI Test")`.
+The secret search answers `No matching blocks.` and counts 1 hidden. The model is
+not told that something was hidden.
+
+### 5. A deny rule
+
+This writes the rule into `config.json`:
+
+```bash
+node -e 'const fs=require("fs");const f=process.env.HOME+"/Library/Application Support/logseq-ai/config.json";const c=JSON.parse(fs.readFileSync(f));c.policy.deny=["page:AI Test 2"];fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")'
+```
+
+```bash
+node bin/logseq-ai-bridge.ts tool get_page '{"title":"AI Test 2"}' --as local
+```
+
+```bash
+node bin/logseq-ai-bridge.ts tool get_page '{"title":"AI Test"}'
+```
+
+Expected: `No page named "AI Test 2".` (the same answer as for a page that
+doesn't exist), and on AI Test the last block reads `See [hidden]`.
+
+To remove the rule again:
+
+```bash
+node -e 'const fs=require("fs");const f=process.env.HOME+"/Library/Application Support/logseq-ai/config.json";const c=JSON.parse(fs.readFileSync(f));c.policy.deny=[];fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")'
+```
+
+A typo in a rule, for example `"pagee:Diary"`, must stop the bridge with an
+error, not be skipped.
+
+### 6. The open-graph guard
+
+Switch Logseq to a different graph, then run:
+
+```bash
+node bin/logseq-ai-bridge.ts tool get_page '{"title":"AI Test"}'
+```
+
+```bash
+logseq server list
+```
+
+Expected: `Open the graph "AI Sandbox" in Logseq first…`, and `server list`
+shows **no** new `cli` worker. Switch back to AI Sandbox afterwards.

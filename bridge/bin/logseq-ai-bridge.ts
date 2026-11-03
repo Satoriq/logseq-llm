@@ -5,6 +5,7 @@ import { AuditLog } from '../src/audit.ts';
 import { ChatStore } from '../src/chats/store.ts';
 import { TurnRunner } from '../src/chats/turns.ts';
 import { BRIDGE_NAME, BRIDGE_VERSION, dataPaths, defaultDataDir, ensureDataDirs, loadConfig, MIN_NODE_MAJOR } from '../src/config.ts';
+import { buildGraph } from '../src/app.ts';
 import { runDoctor } from '../src/doctor.ts';
 import { createBridgeServer, listen, shutdown } from '../src/http/server.ts';
 import { log } from '../src/log.ts';
@@ -15,6 +16,9 @@ const USAGE = `${BRIDGE_NAME} ${BRIDGE_VERSION}
 Usage:
   node bin/logseq-ai-bridge.ts start [--port <n>]
   node bin/logseq-ai-bridge.ts doctor [--sample-page "<title>"] [--sample-search "<text>"]
+  node bin/logseq-ai-bridge.ts tools          list the graph tools models get
+  node bin/logseq-ai-bridge.ts tool <name> ['<json args>'] [--as cloud|local]
+                                               run one tool and print exactly what a model would see
   node bin/logseq-ai-bridge.ts token          print the plugin token (paste it into the plugin settings)
   node bin/logseq-ai-bridge.ts rotate-token   make new tokens (the old ones stop working)
 
@@ -67,6 +71,34 @@ async function main(): Promise<void> {
       ...(flag(args, '--sample-search') !== undefined ? { sampleSearch: flag(args, '--sample-search') as string } : {}),
     });
     process.exitCode = ok ? 0 : 1;
+    return;
+  }
+
+  if (cmd === 'tools') {
+    for (const t of buildGraph(config).tools) process.stdout.write(`${t.name} (${t.kind})\n  ${t.description}\n`);
+    return;
+  }
+
+  if (cmd === 'tool') {
+    const name = args[0];
+    if (name === undefined || name.startsWith('--')) throw new Error('usage: tool <name> [\'<json args>\'] [--as cloud|local]');
+    const rawArgs = args[1] !== undefined && !args[1].startsWith('--') ? args[1] : '{}';
+    const as = flag(args, '--as') ?? 'cloud';
+    if (as !== 'cloud' && as !== 'local') throw new Error('--as must be cloud or local');
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawArgs);
+    } catch {
+      throw new Error('tool arguments must be JSON, e.g. \'{"title":"AI Test"}\'');
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('tool arguments must be a JSON object');
+    const graph = buildGraph(config);
+    const tool = graph.tools.find((t) => t.name === name);
+    if (!tool) throw new Error(`unknown tool "${name}" (see: tools)`);
+    const out = await tool.run(parsed as Record<string, unknown>, { locality: as });
+    process.stdout.write(out.text + '\n');
+    process.stderr.write(`--- ${as} view: ${out.sentUuids.length} item(s) sent, ${out.hiddenCount} hidden by the privacy filter\n`);
+    await new AuditLog(paths.audit).record({ kind: 'tool', chatId: 'cli', tool: tool.name, locality: as, sentUuids: out.sentUuids, hiddenCount: out.hiddenCount });
     return;
   }
 

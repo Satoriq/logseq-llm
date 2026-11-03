@@ -1,13 +1,14 @@
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { parseRule } from './policy/rules.ts';
 
 export const BRIDGE_NAME = 'logseq-ai-bridge';
 export const BRIDGE_VERSION = '0.1.0';
 export const DEFAULT_PORT = 47615;
 export const MIN_NODE_MAJOR = 26;
 
-/** Allow/deny rules. Parsed and enforced from step 1b on; kept as strings here. */
+/** Allow/deny rules, e.g. "tag:private", "page:Diary", "journal:..2025-12-31". See policy/rules.ts. */
 export type PolicyConfig = {
   deny: string[];
   allow: string[];
@@ -166,13 +167,19 @@ export function mergeConfig(base: BridgeConfig, raw: unknown): BridgeConfig {
     for (const k of Object.keys(pol)) {
       if (k !== 'deny' && k !== 'allow') throw new Error(`config.json: unknown policy key "${k}"`);
     }
-    if (pol.deny !== undefined) {
-      if (!isStringArray(pol.deny)) throw new Error('config.json: "policy.deny" must be an array of strings');
-      out.policy.deny = [...pol.deny];
-    }
-    if (pol.allow !== undefined) {
-      if (!isStringArray(pol.allow)) throw new Error('config.json: "policy.allow" must be an array of strings');
-      out.policy.allow = [...pol.allow];
+    for (const key of ['deny', 'allow'] as const) {
+      const list = pol[key];
+      if (list === undefined) continue;
+      if (!isStringArray(list)) throw new Error(`config.json: "policy.${key}" must be an array of strings`);
+      for (const rule of list) {
+        try {
+          parseRule(rule);
+        } catch (err) {
+          // A broken rule must stop the bridge, not be skipped: skipping a deny rule would leak.
+          throw new Error(`config.json: policy.${key}: ${(err as Error).message}`);
+        }
+      }
+      out.policy[key] = [...list];
     }
   }
   return out;
