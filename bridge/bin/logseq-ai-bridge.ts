@@ -113,6 +113,7 @@ async function main(): Promise<void> {
         process.stdout.write(`--- approval card (preview only; writes are applied from the panel)\n${req.title}\nwhere: ${req.target}\n`);
         const b = req.body;
         if (b.kind === 'diff') process.stdout.write(`before: ${b.before}\nafter:  ${b.after}\n`);
+        else if (b.kind === 'diffs') for (const d of b.items) process.stdout.write(`before: ${d.before}\nafter:  ${d.after}\n`);
         else process.stdout.write(`${b.text}\n`);
         for (const w of req.warnings) process.stdout.write(`warning: ${w}\n`);
         process.stdout.write('---\n');

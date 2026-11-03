@@ -67,7 +67,7 @@ export class Panel {
   #busy = false;
   #page: { uuid: string; title: string; kind: 'page' | 'block' } | null = null;
   #pinned = new Map<string, string>();
-  #cards = new Map<string, { root: HTMLElement; status: HTMLElement; buttons: HTMLButtonElement[] }>();
+  #cards = new Map<string, { root: HTMLElement; status: HTMLElement; buttons: HTMLButtonElement[]; title: string }>();
   #destroyed = false;
 
   constructor(root: HTMLElement, deps: PanelDeps) {
@@ -527,11 +527,15 @@ export class Panel {
         if (card) {
           const outcome = String(ev.data.outcome);
           const auto = card.root.classList.contains('lsai-card-auto');
-          card.status.textContent =
-            outcome === 'applied'
-              ? `✓ ${auto ? 'Auto-applied' : 'Applied'}: ${String(ev.data.detail ?? '')}`
+          const detail = String(ev.data.detail ?? '');
+          card.status.textContent = auto
+            ? outcome === 'applied'
+              ? `✓ Auto-applied · ${card.title}`
+              : `✗ Failed · ${card.title}: ${detail}`
+            : outcome === 'applied'
+              ? `✓ Applied: ${detail}`
               : outcome === 'failed'
-                ? `✗ Failed: ${String(ev.data.detail ?? '')}`
+                ? `✗ Failed: ${detail}`
                 : '✗ Not applied';
           card.root.classList.add(`lsai-card-${outcome}`);
           for (const b of card.buttons) b.disabled = true;
@@ -580,33 +584,47 @@ export class Panel {
 
   #approvalCard(a: ApprovalView): void {
     if (this.#cards.has(a.id)) return;
-    const root = this.#h('div', 'lsai-card');
-    root.appendChild(this.#h('div', 'lsai-card-title', a.title));
-    root.appendChild(this.#h('div', 'lsai-card-target', a.target));
+    // The preview: target, what changes, warnings.
+    const details: HTMLElement[] = [this.#h('div', 'lsai-card-target', a.target)];
     const b = a.body;
-    if (b.kind === 'diff') {
-      root.appendChild(this.#h('div', 'lsai-card-label', 'Before'));
-      root.appendChild(this.#pre('lsai-before', b.before));
-      root.appendChild(this.#h('div', 'lsai-card-label', 'After'));
-      root.appendChild(this.#pre('lsai-after', b.after));
-    } else {
-      root.appendChild(this.#pre(b.kind === 'remove' ? 'lsai-remove' : '', b.text));
+    const pairs = b.kind === 'diffs' ? b.items : b.kind === 'diff' ? [{ before: b.before, after: b.after }] : null;
+    if (pairs) {
+      const box = this.#h('div', 'lsai-diffs');
+      for (const d of pairs) {
+        const pair = this.#h('div', 'lsai-diffpair');
+        pair.append(this.#pre('lsai-before', d.before), this.#pre('lsai-after', d.after));
+        box.appendChild(pair);
+      }
+      details.push(box);
+    } else if (b.kind === 'blocks' || b.kind === 'remove' || b.kind === 'text') {
+      details.push(this.#pre(b.kind === 'remove' ? 'lsai-remove' : '', b.text));
     }
     if (a.warnings.length > 0) {
       const ul = this.#h('ul', 'lsai-warnings');
       for (const w of a.warnings) ul.appendChild(this.#h('li', undefined, `⚠ ${w}`));
-      root.appendChild(ul);
+      details.push(ul);
     }
+    const root = this.#h('div', 'lsai-card');
+    const target = this.#live?.root ?? this.#els.log;
+
     if (a.auto) {
-      // autoApply covers this change: a record of what went in, no buttons.
+      // autoApply covers this change: one line of record, the preview behind "Show".
       root.classList.add('lsai-card-auto');
-      const status = this.#h('div', 'lsai-card-status', 'Applying automatically (autoApply for this graph)…');
-      root.appendChild(status);
-      (this.#live?.root ?? this.#els.log).appendChild(root);
-      this.#cards.set(a.id, { root, status, buttons: [] });
+      const status = this.#h('span', 'lsai-card-status', `Applying · ${a.title}`);
+      const more = this.#h('details', 'lsai-card-more');
+      more.appendChild(this.#h('summary', undefined, 'Show'));
+      more.append(...details);
+      const line = this.#h('div', 'lsai-card-line');
+      line.append(status, more);
+      root.appendChild(line);
+      target.appendChild(root);
+      this.#cards.set(a.id, { root, status, buttons: [], title: a.title });
       this.#scroll(true);
       return;
     }
+
+    root.appendChild(this.#h('div', 'lsai-card-title', a.title));
+    root.append(...details);
     const note = this.#h('input', 'lsai-note');
     note.type = 'text';
     note.placeholder = 'Note for the AI if you reject (optional)';
@@ -627,9 +645,8 @@ export class Panel {
     const actions = this.#h('div', 'lsai-card-actions');
     actions.append(note, reject, apply);
     root.append(actions, status);
-    const target = this.#live?.root ?? this.#els.log;
     target.appendChild(root);
-    this.#cards.set(a.id, { root, status, buttons });
+    this.#cards.set(a.id, { root, status, buttons, title: a.title });
     this.#scroll(true);
   }
 

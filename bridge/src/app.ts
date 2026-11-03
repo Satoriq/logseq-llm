@@ -18,6 +18,7 @@ import { LogseqCli } from './tools/cli.ts';
 import { GraphGuard, readTools } from './tools/read.ts';
 import type { ToolDef } from './tools/registry.ts';
 import { writeTools } from './tools/write.ts';
+import type { OwnBlocks } from './tools/write.ts';
 
 /** Wires config → CLI → reader → policy → tools. Shared by `start`, `tool` and `check-claude`. */
 export type Graph = {
@@ -29,7 +30,7 @@ export type Graph = {
 };
 
 /** With `paths`, the write tools are included too (they need the run dir and the audit log). */
-export function buildGraph(config: BridgeConfig, paths?: DataPaths): Graph {
+export function buildGraph(config: BridgeConfig, paths?: DataPaths, own?: OwnBlocks): Graph {
   const cli = new LogseqCli({ bin: config.logseqBin, writeGraphs: config.writeGraphs, timeoutMs: config.cliTimeoutMs, concurrency: config.cliConcurrency });
   const reader = new GraphReader({ run: (req) => cli.run(req), graph: config.graph });
   const policy = new Policy({ deny: parseRules(config.policy.deny), allow: parseRules(config.policy.allow) });
@@ -48,6 +49,7 @@ export function buildGraph(config: BridgeConfig, paths?: DataPaths): Graph {
         runDir: paths.run,
         audit: new AuditLog(paths.audit),
         autoApply: config.graph !== null ? (config.autoApply[config.graph] ?? 'none') : 'none',
+        ...(own ? { own } : {}),
       }),
     );
   }
@@ -66,8 +68,19 @@ export type Runtime = {
 
 export async function createRuntime(opts: { config: BridgeConfig; paths: DataPaths; tokens: Tokens; graph?: Graph }): Promise<Runtime> {
   const { config, paths, tokens } = opts;
-  const graph = opts.graph ?? buildGraph(config, paths);
   const store = new ChatStore(paths.chats);
+  // Blocks the AI created per chat, kept in the chat's metadata (UUIDs only).
+  const own: OwnBlocks = {
+    list: async (chatId) => new Set((await store.get(chatId))?.aiCreated ?? []),
+    add: async (chatId, uuids) => {
+      const meta = await store.get(chatId);
+      if (!meta) return;
+      const set = new Set(meta.aiCreated ?? []);
+      for (const u of uuids) set.add(u.toLowerCase());
+      await store.update(chatId, { aiCreated: [...set].slice(-5000) });
+    },
+  };
+  const graph = opts.graph ?? buildGraph(config, paths, own);
   const audit = new AuditLog(paths.audit);
   let port = config.port;
   let turns: TurnRunner | undefined;

@@ -39,16 +39,35 @@ export type WriteToolDeps = {
   audit?: AuditLog;
   /** This graph's autoApply setting (default none). */
   autoApply?: AutoApplyMode;
+  /** What the AI created in each chat (for autoApply "own"). */
+  own?: OwnBlocks;
+};
+
+export type OwnBlocks = {
+  list: (chatId: string) => Promise<Set<string>>;
+  add: (chatId: string, uuids: string[]) => Promise<void>;
 };
 
 const ADDITIONS = new Set(['insert_blocks', 'create_task', 'create_page']);
 
+type Applied = {
+  /** For the model (may list block ids). */
+  summary: string;
+  /** For the card (short, no ids). */
+  short: string;
+  targetUuids: string[];
+  /** New blocks/pages, remembered as the AI's own in this chat. */
+  created?: string[];
+};
+
 type Prepared = {
   approval: ApprovalRequest;
-  /** Runs the change exactly as previewed. Returns the summary for the model. */
-  apply: () => Promise<{ summary: string; targetUuids: string[] }>;
+  /** Runs the change exactly as previewed. */
+  apply: () => Promise<Applied>;
   cleanup?: () => Promise<void>;
   targetUuids: string[];
+  /** For edits/deletes: the blocks that must all be the AI's own (this chat) for autoApply "own". */
+  ownTargets?: string[];
 };
 
 function cliMessage(r: CliResult): string {
@@ -174,8 +193,14 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
       await ensureTag(graph);
       const prepared = await prepare(args, ctx, graph);
       const mode = deps.autoApply ?? 'none';
+      const clean = prepared.approval.warnings.length === 0;
       // Additions skip the card only when it would show no warnings (links, images, new pages, hidden refs).
-      const auto = mode === 'all' || (mode === 'additions' && ADDITIONS.has(name) && prepared.approval.warnings.length === 0);
+      let auto = mode === 'all' || ((mode === 'additions' || mode === 'own') && ADDITIONS.has(name) && clean);
+      // "own": edits/deletes skip it too, if every block they touch was added by the AI in this chat.
+      if (!auto && mode === 'own' && clean && ctx.chatId && deps.own && prepared.ownTargets && prepared.ownTargets.length > 0) {
+        const mine = await deps.own.list(ctx.chatId);
+        auto = prepared.ownTargets.every((u) => mine.has(u.toLowerCase()));
+      }
       try {
         const { view, decision } = await ctx.approve({ ...prepared.approval, ...(auto ? { auto: true } : {}) });
         const done = (outcome: 'applied' | 'rejected' | 'failed', detail: string, targetUuids: string[]): void => {
@@ -196,7 +221,8 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
         }
         try {
           const r = await prepared.apply();
-          done('applied', r.summary, r.targetUuids);
+          if (r.created?.length && ctx.chatId && deps.own) await deps.own.add(ctx.chatId, r.created);
+          done('applied', r.short, r.targetUuids);
           return { text: `Applied: ${r.summary}`, sentUuids: [], hiddenCount: 0 };
         } catch (err) {
           const msg = (err as Error).message;
@@ -272,7 +298,12 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
             const r = await run(req);
             if (!r.ok) throw new Error(cliMessage(r));
             const uuids = await uuidsOf(resultIds(r.json));
-            return { summary: `added ${blocks} block(s)${uuids.length ? `: ${uuids.map((u) => `[id:${u}]`).join(', ')}` : ''}`, targetUuids: [...targetUuids, ...uuids] };
+            return {
+              summary: `added ${blocks} block(s)${uuids.length ? `: ${uuids.map((u) => `[id:${u}]`).join(', ')}` : ''}`,
+              short: `added ${blocks} block${blocks === 1 ? '' : 's'}`,
+              targetUuids: [...targetUuids, ...uuids],
+              created: uuids,
+            };
           },
         };
       } catch (err) {
@@ -282,43 +313,78 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
     }),
   };
 
-  const updateBlock: ToolDef = {
-    name: 'update_block',
+  const updateBlocks: ToolDef = {
+    name: 'update_blocks',
     kind: 'write',
-    description: "Propose replacing one block's text (not its children). The user sees before/after and must approve it.",
+    description:
+      "Propose replacing the text of one or more blocks (not their children), e.g. to translate or fix several lines at once. " +
+      'Put all related edits in ONE call. The user sees before/after for each and must approve them.',
     inputSchema: {
       type: 'object',
-      properties: { uuid: { type: 'string' }, content: { type: 'string', description: 'The complete new text of the block' } },
-      required: ['uuid', 'content'],
+      properties: {
+        edits: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 50,
+          items: {
+            type: 'object',
+            properties: { uuid: { type: 'string' }, content: { type: 'string', description: 'The complete new text of the block' } },
+            required: ['uuid', 'content'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['edits'],
       additionalProperties: false,
     },
-    label: () => 'proposing an edit',
-    run: withApproval('update_block', async (args, ctx, graph) => {
-      const uuid = argString(args, 'uuid', { required: true, max: 64 }) as string;
-      const content = (argString(args, 'content', { required: true, max: 20_000 }) as string).replace(/\r\n?/g, '\n').trim();
-      if (content === '') throw new ToolInputError('"content" is empty (use remove_block to delete a block)');
-      const { node, chain } = await visibleBlock(uuid, ctx);
-      const warnings = await checkContent(content, ctx);
-      // Links the AI couldn't see (shown to it as [hidden]) that the new text would drop.
-      const refTargets = await deps.reader.byIds(node.refs.map((r) => r.id));
-      const unseen = refTargets.filter((t) => !visibleTo(deps.policy.evaluate({ node: t, chain: chainOf(t) }).visibility, ctx.locality));
-      const dropped = unseen.filter((t) => !content.includes(t.title) && !(t.uuid && content.includes(t.uuid)));
-      if (dropped.length > 0) warnings.push(`This block links to ${dropped.length} thing(s) the AI can't see; the new text removes ${dropped.length === 1 ? 'that link' : 'those links'}.`);
-      for (const p of await newPagesIn(content)) warnings.push(`Will create new page: ${p}`);
-      const req = { command: ['upsert', 'block'], graph, options: { uuid: (node.uuid as string).toLowerCase(), content, 'update-tags': `["${AI_TAG}"]` } };
+    label: (a) => (Array.isArray(a.edits) && a.edits.length > 1 ? `proposing ${a.edits.length} edits` : 'proposing an edit'),
+    run: withApproval('update_blocks', async (args, ctx, graph) => {
+      const raw = args.edits;
+      if (!Array.isArray(raw) || raw.length === 0) throw new ToolInputError('"edits" must be a non-empty list of {uuid, content}');
+      if (raw.length > 50) throw new ToolInputError('at most 50 edits per call');
+      const items: { node: GNode; page: string; content: string }[] = [];
+      const warnings: string[] = [];
+      const seen = new Set<string>();
+      let dropped = 0;
+      for (const e of raw as unknown[]) {
+        if (e === null || typeof e !== 'object' || Array.isArray(e)) throw new ToolInputError('each edit must be {uuid, content}');
+        const ed = e as Record<string, unknown>;
+        const uuid = (argString(ed, 'uuid', { required: true, max: 64 }) as string).toLowerCase();
+        if (seen.has(uuid)) throw new ToolInputError(`block ${uuid} is edited twice`);
+        seen.add(uuid);
+        const content = (argString(ed, 'content', { required: true, max: 20_000 }) as string).replace(/\r\n?/g, '\n').trim();
+        if (content === '') throw new ToolInputError('an edit has empty "content" (use remove_block to delete a block)');
+        const { node, chain } = await visibleBlock(uuid, ctx);
+        for (const w of await checkContent(content, ctx)) if (!warnings.includes(w)) warnings.push(w);
+        // Links the AI couldn't see (shown to it as [hidden]) that the new text would drop.
+        const refTargets = await deps.reader.byIds(node.refs.map((r) => r.id));
+        const unseen = refTargets.filter((t) => !visibleTo(deps.policy.evaluate({ node: t, chain: chainOf(t) }).visibility, ctx.locality));
+        dropped += unseen.filter((t) => !content.includes(t.title) && !(t.uuid && content.includes(t.uuid))).length;
+        for (const p of await newPagesIn(content)) if (!warnings.includes(`Will create new page: ${p}`)) warnings.push(`Will create new page: ${p}`);
+        items.push({ node, page: chain.at(-1)?.title ?? '?', content });
+      }
+      if (dropped > 0) warnings.push(`These blocks link to ${dropped} thing(s) the AI can't see; the new text removes ${dropped === 1 ? 'that link' : 'those links'}.`);
+      const pages = [...new Set(items.map((i) => i.page))];
+      const n = items.length;
+      const uuids = items.map((i) => (i.node.uuid as string).toLowerCase());
       return {
         approval: {
-          tool: 'update_block',
-          title: 'Edit a block',
-          target: `${quote(node.title)} on page "${chain.at(-1)?.title ?? '?'}"`,
-          body: { kind: 'diff', before: node.title, after: content },
+          tool: 'update_blocks',
+          title: n === 1 ? 'Edit a block' : `Edit ${n} blocks`,
+          target: n === 1 ? `${quote(items[0]?.node.title ?? '')} on page "${pages[0]}"` : pages.length === 1 ? `on page "${pages[0]}"` : `on ${pages.length} pages`,
+          body: { kind: 'diffs', items: items.map((i) => ({ before: i.node.title, after: i.content })) },
           warnings,
         },
-        targetUuids: node.uuid ? [node.uuid] : [],
+        targetUuids: uuids,
+        ownTargets: uuids,
         apply: async () => {
-          const r = await run(req);
-          if (!r.ok) throw new Error(cliMessage(r));
-          return { summary: `updated [id:${node.uuid}]`, targetUuids: node.uuid ? [node.uuid] : [] };
+          let doneCount = 0;
+          for (const i of items) {
+            const r = await run({ command: ['upsert', 'block'], graph, options: { uuid: (i.node.uuid as string).toLowerCase(), content: i.content, 'update-tags': `["${AI_TAG}"]` } });
+            if (!r.ok) throw new Error(`${doneCount} of ${n} edits applied, then: ${cliMessage(r)}`);
+            doneCount += 1;
+          }
+          return { summary: `edited ${n} block(s): ${uuids.map((u) => `[id:${u}]`).join(', ')}`, short: `edited ${n} block${n === 1 ? '' : 's'}`, targetUuids: uuids };
         },
       };
     }),
@@ -376,7 +442,7 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
             if (!t.ok) throw new Error(`task created, but tagging it failed: ${cliMessage(t)}`);
           }
           const uuids = await uuidsOf(ids);
-          return { summary: `created task${uuids.length ? ` [id:${uuids[0]}]` : ''}`, targetUuids: [...targetUuids, ...uuids] };
+          return { summary: `created task${uuids.length ? ` [id:${uuids[0]}]` : ''}`, short: 'created a task', targetUuids: [...targetUuids, ...uuids], created: uuids };
         },
       };
     }),
@@ -407,7 +473,7 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
           const r = await run({ command: ['upsert', 'page'], graph, options: { page: title, 'update-tags': `["${AI_TAG}"]` } });
           if (!r.ok) throw new Error(cliMessage(r));
           const uuids = await uuidsOf(resultIds(r.json));
-          return { summary: `created page "${title}"`, targetUuids: uuids };
+          return { summary: `created page "${title}"`, short: `created page "${title}"`, targetUuids: uuids, created: uuids };
         },
       };
     }),
@@ -431,9 +497,11 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
       const lines = [`- ${node.title}`];
       let total = 1;
       let unseen = 0;
+      const subtree: string[] = node.uuid ? [node.uuid.toLowerCase()] : [];
       const walk = (id: number, c: GNode[], depth: number): void => {
         for (const k of kids.get(id) ?? []) {
           total += 1;
+          if (k.uuid) subtree.push(k.uuid.toLowerCase());
           if (!visibleTo(deps.policy.evaluate({ node: k, chain: c }).visibility, ctx.locality)) unseen += 1;
           lines.push(`${'  '.repeat(depth)}- ${k.title}`);
           walk(k.id, [k, ...c], depth + 1);
@@ -444,14 +512,15 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
       return {
         approval: { tool: 'remove_block', title: `Delete ${total} block${total === 1 ? '' : 's'}`, target: `on page "${page.title}"`, body: { kind: 'remove', text: lines.join('\n') }, warnings },
         targetUuids: node.uuid ? [node.uuid] : [],
+        ownTargets: subtree,
         apply: async () => {
           const r = await run({ command: ['remove', 'block'], graph, options: { uuid: (node.uuid as string).toLowerCase() } });
           if (!r.ok) throw new Error(cliMessage(r));
-          return { summary: `deleted ${total} block(s)`, targetUuids: node.uuid ? [node.uuid] : [] };
+          return { summary: `deleted ${total} block(s)`, short: `deleted ${total} block${total === 1 ? '' : 's'}`, targetUuids: node.uuid ? [node.uuid] : [] };
         },
       };
     }),
   };
 
-  return [insertBlocks, updateBlock, createTask, createPage, removeBlock];
+  return [insertBlocks, updateBlocks, createTask, createPage, removeBlock];
 }

@@ -4,7 +4,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { parseRule } from './policy/rules.ts';
 
 export const BRIDGE_NAME = 'logseq-ai-bridge';
-export const BRIDGE_VERSION = '0.2.0';
+export const BRIDGE_VERSION = '0.3.0';
 export const DEFAULT_PORT = 47615;
 export const MIN_NODE_MAJOR = 26;
 
@@ -31,6 +31,7 @@ export type BridgeConfig = {
    * Per graph: which approved-write kinds skip the card.
    *   none       every write needs Apply (default)
    *   additions  new blocks/tasks/pages go in directly, but only when the card would show no warnings
+   *   own        additions, plus edits/deletes of blocks the AI itself added in the same chat (no warnings)
    *   all        everything goes in directly (still checked and logged)
    */
   autoApply: Record<string, AutoApplyMode>;
@@ -41,8 +42,8 @@ export type BridgeConfig = {
   policy: PolicyConfig;
 };
 
-export type AutoApplyMode = 'none' | 'additions' | 'all';
-const AUTO_MODES: readonly AutoApplyMode[] = ['none', 'additions', 'all'];
+export type AutoApplyMode = 'none' | 'additions' | 'own' | 'all';
+const AUTO_MODES: readonly AutoApplyMode[] = ['none', 'additions', 'own', 'all'];
 
 export type DataPaths = {
   root: string;
@@ -171,7 +172,7 @@ export function mergeConfig(base: BridgeConfig, raw: unknown): BridgeConfig {
     if (a === null || typeof a !== 'object' || Array.isArray(a)) throw new Error('config.json: "autoApply" must be an object like {"AI Sandbox": "additions"}');
     const outA: Record<string, AutoApplyMode> = {};
     for (const [graph, mode] of Object.entries(a as Record<string, unknown>)) {
-      if (!AUTO_MODES.includes(mode as AutoApplyMode)) throw new Error(`config.json: autoApply["${graph}"] must be "none", "additions" or "all"`);
+      if (!AUTO_MODES.includes(mode as AutoApplyMode)) throw new Error(`config.json: autoApply["${graph}"] must be "none", "additions", "own" or "all"`);
       outA[graph] = mode as AutoApplyMode;
     }
     out.autoApply = outA;

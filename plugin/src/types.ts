@@ -33,6 +33,7 @@ export type BridgeEvent = {
 export type PreviewBody =
   | { kind: 'blocks'; text: string }
   | { kind: 'diff'; before: string; after: string }
+  | { kind: 'diffs'; items: { before: string; after: string }[] }
   | { kind: 'remove'; text: string }
   | { kind: 'text'; text: string };
 

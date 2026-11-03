@@ -46,6 +46,8 @@ export type ChatMeta = {
   effort?: string;
   /** claude -p session id (`--session-id` on the first turn, `--resume` afterwards). */
   claudeSessionId?: string;
+  /** UUIDs of blocks/pages the AI created in this chat (for autoApply "own"). */
+  aiCreated?: string[];
 };
 
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

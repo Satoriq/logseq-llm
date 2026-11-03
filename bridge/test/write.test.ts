@@ -84,7 +84,7 @@ test('insert_blocks: dry run → card → Apply runs exactly the previewed comma
   assert.deepEqual(real.options, dryRest, 'apply = the previewed command minus --dry-run');
   assert.equal(real.options?.['update-tags'], '["AI-GENERATED"]');
   assert.match(out.text, /^Applied: added 2 block\(s\): \[id:/);
-  assert.match(outcomes[0] ?? '', /^applied:/);
+  assert.equal(outcomes[0], 'applied:added 2 blocks', 'the card gets a short summary, no ids');
   const created = [...fake.byId.values()].filter((e) => e.title.startsWith('Summary of'));
   assert.deepEqual(created[0]?.tags, [300]);
   assert.deepEqual((await readdir(runDir)).filter((f) => f.startsWith('blocks-')), [], 'temp blocks file removed');
@@ -100,7 +100,7 @@ test('Reject writes nothing and tells the model why', async () => {
 
 test('content rules: no [hidden], no ai-access, warnings for links and images', async () => {
   const { tool } = await setup();
-  await assert.rejects(tool('update_block').run({ uuid: '05c4b96b-5012-4826-a902-693efb290e0d', content: 'See [hidden]' }, ctx('apply').c), /contains "\[hidden\]"/);
+  await assert.rejects(tool('update_blocks').run({ edits: [{ uuid: '05c4b96b-5012-4826-a902-693efb290e0d', content: 'See [hidden]' }] }, ctx('apply').c), /contains "\[hidden\]"/);
   await assert.rejects(tool('insert_blocks').run({ page: 'AI Test', markdown: '- x\n  ai-access:: cloud-ok' }, ctx('apply').c), /privacy setting/);
   const { c, cards } = ctx('reject');
   await tool('insert_blocks').run({ page: 'AI Test', markdown: '- ![x](https://evil.example/p.png) see https://example.com' }, c);
@@ -110,21 +110,21 @@ test('content rules: no [hidden], no ai-access, warnings for links and images', 
 
 test('a cloud model cannot write to blocks it cannot see', async () => {
   const { tool, fake } = await setup();
-  await assert.rejects(tool('update_block').run({ uuid: 'ef13d15c-eb66-4eb1-ab54-edbae48baa8e', content: 'x' }, ctx('apply', 'cloud').c), /No block with id/);
+  await assert.rejects(tool('update_blocks').run({ edits: [{ uuid: 'ef13d15c-eb66-4eb1-ab54-edbae48baa8e', content: 'x' }] }, ctx('apply', 'cloud').c), /No block with id/);
   await assert.rejects(tool('insert_blocks').run({ parent_uuid: '44402c58-25a1-4806-9f1f-f4771a8e2d63', markdown: '- x' }, ctx('apply', 'cloud').c), /No block with id/);
   // A local model may.
   const { c } = ctx('apply', 'local');
-  assert.match((await tool('update_block').run({ uuid: 'ef13d15c-eb66-4eb1-ab54-edbae48baa8e', content: 'Edited secret #private' }, c)).text, /^Applied/);
+  assert.match((await tool('update_blocks').run({ edits: [{ uuid: 'ef13d15c-eb66-4eb1-ab54-edbae48baa8e', content: 'Edited secret #private' }] }, c)).text, /^Applied/);
   assert.equal(fake.writes.length, 1);
 });
 
-test('update_block: before/after card and a warning when hidden links would be dropped', async () => {
+test('update_blocks: before/after card and a warning when hidden links would be dropped', async () => {
   const { tool } = await setup({ deny: ['page:AI Test 2'] });
   const { c, cards } = ctx('apply');
-  const out = await tool('update_block').run({ uuid: '05c4b96b-5012-4826-a902-693efb290e0d', content: 'See the other page' }, c);
-  assert.deepEqual(cards[0]?.body, { kind: 'diff', before: 'See [[AI Test 2]]', after: 'See the other page' });
-  assert.ok(cards[0]?.warnings.some((w) => w.includes("links to 1 thing(s) the AI can't see")));
-  assert.match(out.text, /^Applied: updated/);
+  const out = await tool('update_blocks').run({ edits: [{ uuid: '05c4b96b-5012-4826-a902-693efb290e0d', content: 'See the other page' }] }, c);
+  assert.deepEqual(cards[0]?.body, { kind: 'diffs', items: [{ before: 'See [[AI Test 2]]', after: 'See the other page' }] });
+  assert.ok(cards[0]?.warnings.some((w) => w.includes("link to 1 thing(s) the AI can't see")));
+  assert.match(out.text, /^Applied: edited 1 block/);
 });
 
 test('remove_block shows everything that would go, including blocks hidden from the AI', async () => {
@@ -216,7 +216,7 @@ test('autoApply "additions": plain additions skip the card, anything with a warn
   assert.match((await tool('create_task').run({ content: 'Buy pears', page: 'AI Test' }, c)).text, /^Applied/);
   assert.match((await tool('insert_blocks').run({ page: 'AI Test', markdown: '- see https://example.com' }, c)).text, /rejected/, 'a web link → manual card');
   assert.match((await tool('insert_blocks').run({ page: 'AI Test', markdown: '- about [[Brand New]]' }, c)).text, /rejected/, 'a new page → manual card');
-  assert.match((await tool('update_block').run({ uuid: 'a558ac4e-ae05-43f3-af22-f167c5f56975', content: 'Apples are green' }, c)).text, /rejected/, 'edits always need Apply');
+  assert.match((await tool('update_blocks').run({ edits: [{ uuid: 'a558ac4e-ae05-43f3-af22-f167c5f56975', content: 'Apples are green' }] }, c)).text, /rejected/, 'edits always need Apply');
   assert.match((await tool('remove_block').run({ uuid: '54f76cdd-307a-436e-9716-f129841c97e6' }, c)).text, /rejected/, 'deletes always need Apply');
   assert.deepEqual(seen.map((x) => x.auto), [true, true, false, false, false, false]);
   assert.equal(fake.writes.length, 3, 'insert + task + its tag');
@@ -270,4 +270,48 @@ test('end to end: claude proposes a write, the panel approves it over HTTP', asy
   } finally {
     await shutdown(rt.server);
   }
+});
+
+test('autoApply "own": edits and deletes of blocks the AI added in this chat skip the card; yours do not', async () => {
+  const fake = new FakeLogseq();
+  const reader = new GraphReader({ run: fake.run, graph: 'AI Sandbox' });
+  const policy = new Policy({ deny: [], allow: [] });
+  const runDir = await mkdtemp(join(tmpdir(), 'lsai-wo-'));
+  const owned = new Map<string, Set<string>>();
+  const own = {
+    list: async (chat: string) => owned.get(chat) ?? new Set<string>(),
+    add: async (chat: string, uuids: string[]) => {
+      const set = owned.get(chat) ?? new Set<string>();
+      for (const u of uuids) set.add(u.toLowerCase());
+      owned.set(chat, set);
+    },
+  };
+  const tools = writeTools({ run: fake.run, reader, policy, ensureGraph: async () => {}, graph: 'AI Sandbox', writeGraphs: ['AI Sandbox'], runDir, autoApply: 'own', own });
+  const tool = (n: string): ToolDef => tools.find((t) => t.name === n) as ToolDef;
+  const autos: boolean[] = [];
+  const mk = (chatId: string): ToolContext => ({
+    locality: 'cloud',
+    chatId,
+    turnId: 't',
+    approve: async (req) => {
+      autos.push(req.auto === true);
+      return { view: { ...req, id: 'x', chatId, turnId: 't', createdAt: 0 }, decision: req.auto ? { decision: 'apply', reason: 'auto' } : { decision: 'reject', reason: 'user' } };
+    },
+  });
+  const c = mk('chat-1');
+  const added = await tool('insert_blocks').run({ page: 'AI Test', markdown: '- Poem title\n  - line one\n  - line two' }, c);
+  const ids = [...added.text.matchAll(/\[id:([0-9a-f-]{36})\]/g)].map((m) => m[1] as string);
+  assert.equal(ids.length, 3);
+  // Translate the AI's own lines in one call: auto.
+  const edited = await tool('update_blocks').run({ edits: ids.slice(1).map((uuid, i) => ({ uuid, content: `translated ${i}` })) }, c);
+  assert.match(edited.text, /^Applied: edited 2 block/);
+  // Mixed with one of your blocks: card.
+  assert.match((await tool('update_blocks').run({ edits: [{ uuid: ids[1] as string, content: 'x' }, { uuid: 'a558ac4e-ae05-43f3-af22-f167c5f56975', content: 'y' }] }, c)).text, /rejected/);
+  // Another chat doesn't own them: card.
+  assert.match((await tool('update_blocks').run({ edits: [{ uuid: ids[1] as string, content: 'z' }] }, mk('chat-2'))).text, /rejected/);
+  // Delete the AI's whole poem (all own): auto.
+  assert.match((await tool('remove_block').run({ uuid: ids[0] as string }, c)).text, /^Applied: deleted 3 block/);
+  // Deleting a block of yours: card.
+  assert.match((await tool('remove_block').run({ uuid: '54f76cdd-307a-436e-9716-f129841c97e6' }, c)).text, /rejected/);
+  assert.deepEqual(autos, [true, true, false, false, true, false]);
 });

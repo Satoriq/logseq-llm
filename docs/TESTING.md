@@ -524,7 +524,8 @@ AI Test is unchanged.
 2. Ask for another addition, type a note such as *"too long"*, then click
    **Reject**. Nothing is written; Claude sees your note.
 3. *"Change 'Apples are red' to 'Apples are red or green'."* The card
-   shows Before (struck through) and After.
+   shows Before (struck through) and After. Several edits come as one card
+   (`update_blocks`).
 4. *"Add a task to buy pears on AI Test."* After Apply, a task appears,
    tagged `#AI-GENERATED`.
 5. *"Delete the summary block you added."* The card lists exactly what
@@ -534,33 +535,44 @@ AI Test is unchanged.
 7. Ask for a change, then press **Stop** while the card is waiting. The
    card says `✗ Not applied`.
 
-### 4b. Auto-apply for additions (your choice B)
+### 4b. Auto-apply
 
-This sets AI Sandbox to auto-apply additions. Your real graph is unaffected
-and isn't in `writeGraphs` anyway.
+This sets AI Sandbox to `own`. Your real graph is unaffected and isn't in
+`writeGraphs` anyway.
 
 ```bash
-node -e 'const fs=require("fs");const f=process.env.HOME+"/Library/Application Support/logseq-ai/config.json";const c=JSON.parse(fs.readFileSync(f));c.autoApply={"AI Sandbox":"additions"};fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")'
+node -e 'const fs=require("fs");const f=process.env.HOME+"/Library/Application Support/logseq-ai/config.json";const c=JSON.parse(fs.readFileSync(f));c.autoApply={"AI Sandbox":"own"};fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")'
 ```
 
 Restart the bridge.
 
-- *"Write a short poem in today's journal."* The block goes in right away. A
-  dashed card reads `✓ Auto-applied: …`, and there are no buttons.
-- *"Add a block with a link to https://example.com to AI Test."* It has a web
-  link, so you get the normal card with Apply/Reject.
-- Edits and deletes always show the normal card.
+| Value | Goes in without a card |
+|---|---|
+| `"none"` | nothing; every write needs Apply |
+| `"additions"` | new blocks, tasks and pages |
+| `"own"` | additions, **plus edits and deletes of blocks the AI added in the same chat** |
+| `"all"` | everything |
 
-Values: `"none"` (every write needs Apply), `"additions"` (new blocks, tasks
-and pages without warnings go in directly), `"all"` (everything goes in
-directly).
+A change that would show a warning (web or image link, new page, link to a
+hidden page) always gets the normal card. So does any edit or delete that
+touches a block you wrote.
+
+Try:
+
+- *"Write a short poem in today's journal."* You get one line,
+  `✓ Auto-applied · Add N blocks to "…"`, with **Show** for the preview.
+- *"Translate that poem to English."* Claude edits all the lines in one
+  `update_blocks` call. Because they're its own blocks from this chat, the
+  edit is auto-applied too.
+- *"Change 'Apples are red' to 'Apples are green'."* That's your block, so you
+  get the normal card with before/after.
 
 ### Which build is running?
 
-The panel's status line shows `● Connected · panel 0.2.0 · bridge 0.2.0`. If
+The panel's status line shows `● Connected · panel 0.3.0 · bridge 0.3.0`. If
 it shows no version numbers, Logseq still runs an old plugin build. Run
 `npm run build` in `plugin/`, then switch the plugin off and on. Approval cards
-need panel ≥ 0.2.0.
+need panel ≥ 0.2.0; batched edits and compact auto-apply lines need 0.3.0.
 
 If a write needs your approval and no up-to-date panel is open on that chat,
 the bridge doesn't wait. It tells Claude right away that nothing was changed,
