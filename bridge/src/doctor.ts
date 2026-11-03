@@ -1,0 +1,172 @@
+import { execFile } from 'node:child_process';
+import { constants } from 'node:fs';
+import { access, stat, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import type { BridgeConfig, DataPaths } from './config.ts';
+import { MIN_NODE_MAJOR } from './config.ts';
+import { LogseqCli } from './tools/cli.ts';
+
+/**
+ * Read-only diagnostics. Nothing here writes to a graph or changes a setting.
+ * Files written: <data>/doctor/*.txt|json (help texts and, only when asked, samples).
+ */
+
+type Check = { name: string; ok: boolean; detail: string; warnOnly?: boolean };
+
+/** Options the bridge passes per CLI command; doctor checks the installed CLI still lists them. */
+const CLI_COMMANDS_USED: Record<string, string[]> = {
+  show: ['--page', '--uuid', '--id', '--level', '--linked-references'],
+  'search block': ['--content'],
+  'search page': ['--content'],
+  'list task': ['--status', '--limit'],
+  'list page': ['--journal-only', '--limit'],
+  query: ['--query', '--inputs'],
+  'upsert block': ['--target-uuid', '--target-page', '--pos', '--content', '--blocks-file', '--dry-run', '--update-tags'],
+  'upsert task': ['--status', '--content', '--target-page'],
+  'remove block': ['--uuid'],
+};
+
+const CLAUDE_FLAGS_NEEDED = [
+  '--print',
+  '--input-format',
+  '--output-format',
+  '--include-partial-messages',
+  '--verbose',
+  '--restricted',
+  '--tools',
+  '--strict-mcp-config',
+  '--mcp-config',
+  '--allowedTools',
+  '--permission-mode',
+  '--permission-prompts',
+  '--disable-slash-commands',
+  '--system-prompt',
+  '--model',
+  '--effort',
+  '--session-id',
+  '--resume',
+];
+
+function run(bin: string, args: string[], timeoutMs = 20000): Promise<{ ok: boolean; out: string; err: string }> {
+  return new Promise((resolve) => {
+    execFile(bin, args, { shell: false, timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, encoding: 'utf8' }, (error, stdout, stderr) => {
+      resolve({ ok: !error, out: stdout, err: error && typeof error.code !== 'number' ? error.message : stderr });
+    });
+  });
+}
+
+function flagsIn(text: string): Set<string> {
+  return new Set(text.match(/--[a-zA-Z][a-zA-Z0-9-]*/g) ?? []);
+}
+
+async function isExecutable(p: string): Promise<boolean> {
+  try {
+    await access(p, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export type DoctorOptions = {
+  config: BridgeConfig;
+  paths: DataPaths;
+  /** Save `show --page=<title>` JSON output, to learn the CLI's JSON shape. */
+  samplePage?: string;
+  /** Save `search block --content=<text>` JSON output. */
+  sampleSearch?: string;
+  out?: (line: string) => void;
+};
+
+export async function runDoctor(opts: DoctorOptions): Promise<boolean> {
+  const out = opts.out ?? ((l: string) => process.stdout.write(l + '\n'));
+  const { config, paths } = opts;
+  const checks: Check[] = [];
+  const add = (c: Check): void => {
+    checks.push(c);
+    out(`${c.ok ? 'ok  ' : c.warnOnly ? 'warn' : 'FAIL'}  ${c.name}: ${c.detail}`);
+  };
+
+  // Node
+  const major = Number(process.versions.node.split('.')[0]);
+  add({ name: 'node', ok: major >= MIN_NODE_MAJOR, detail: `v${process.versions.node} (need >= ${MIN_NODE_MAJOR}) at ${process.execPath}` });
+
+  // Data dir permissions
+  const st = await stat(paths.root);
+  add({ name: 'data dir', ok: (st.mode & 0o077) === 0, detail: `${paths.root} mode ${(st.mode & 0o777).toString(8)} (want 700)` });
+  try {
+    const cst = await stat(paths.config);
+    // Others must not be able to change the config (it holds the allow/deny lists).
+    add({ name: 'config.json', ok: (cst.mode & 0o022) === 0, detail: `${paths.config} mode ${(cst.mode & 0o777).toString(8)} (want 600; run: chmod 600 on it)` });
+  } catch {
+    add({ name: 'config.json', ok: false, detail: `missing: ${paths.config}` });
+  }
+
+  // logseq CLI
+  const logseqOk = await isExecutable(config.logseqBin);
+  add({ name: 'logseq binary', ok: logseqOk, detail: config.logseqBin });
+  if (logseqOk) {
+    const cli = new LogseqCli({ bin: config.logseqBin, writeGraphs: [], timeoutMs: config.cliTimeoutMs, concurrency: 1 });
+    const version = await cli.runDiagnostic(['--version']);
+    add({ name: 'logseq --version', ok: version.ok, detail: (version.stdout || version.stderr).trim().split('\n')[0] ?? '' });
+
+    const graphs = await cli.runDiagnostic(['graph', 'list']);
+    add({ name: 'logseq graph list', ok: graphs.ok, detail: graphs.ok ? `${graphs.stdout.trim().split('\n').length} line(s) of output` : graphs.stderr.trim() });
+    if (graphs.ok && config.graph !== null) {
+      add({ name: 'configured graph', ok: graphs.stdout.includes(config.graph), detail: config.graph, warnOnly: true });
+    } else if (config.graph === null) {
+      add({ name: 'configured graph', ok: false, warnOnly: true, detail: 'graph is null in config.json, so tools use the CLI\'s current graph. Set it to your sandbox graph for testing.' });
+    }
+
+    const helpParts: string[] = [];
+    const top = await cli.runDiagnostic(['--help']);
+    helpParts.push(`=== logseq --help\n${top.stdout}${top.stderr}`);
+    for (const [command, needed] of Object.entries(CLI_COMMANDS_USED)) {
+      const args = [...command.split(' '), '--help'];
+      const help = await cli.runDiagnostic(args);
+      const text = `${help.stdout}${help.stderr}`;
+      helpParts.push(`=== logseq ${command} --help\n${text}`);
+      const listed = flagsIn(text);
+      const missing = needed.filter((f) => !listed.has(f));
+      add({
+        name: `logseq ${command} options`,
+        ok: help.ok && missing.length === 0,
+        warnOnly: true,
+        detail: !help.ok ? 'help failed' : missing.length === 0 ? 'all expected options listed' : `not listed: ${missing.join(', ')}`,
+      });
+    }
+    const helpFile = join(paths.doctor, 'logseq-cli-help.txt');
+    await writeFile(helpFile, helpParts.join('\n\n'), { mode: 0o600 });
+    out(`      saved CLI help to ${helpFile}`);
+
+    if (opts.samplePage !== undefined) {
+      const r = await cli.run({ command: ['show'], graph: config.graph, options: { page: opts.samplePage, level: 2 } });
+      const f = join(paths.doctor, 'sample-show.json');
+      await writeFile(f, r.stdout || r.stderr, { mode: 0o600 });
+      add({ name: 'sample show', ok: r.ok, detail: `${f} (contains note text: share only if harmless)` });
+    }
+    if (opts.sampleSearch !== undefined) {
+      const r = await cli.run({ command: ['search', 'block'], graph: config.graph, options: { content: opts.sampleSearch } });
+      const f = join(paths.doctor, 'sample-search.json');
+      await writeFile(f, r.stdout || r.stderr, { mode: 0o600 });
+      add({ name: 'sample search', ok: r.ok, detail: `${f} (contains note text: share only if harmless)` });
+    }
+  }
+
+  // claude CLI
+  const claudeOk = await isExecutable(config.claudeBin);
+  add({ name: 'claude binary', ok: claudeOk, detail: config.claudeBin });
+  if (claudeOk) {
+    const v = await run(config.claudeBin, ['--version']);
+    add({ name: 'claude --version', ok: v.ok, detail: (v.out || v.err).trim() });
+    const h = await run(config.claudeBin, ['--help']);
+    const listed = flagsIn(h.out);
+    const missing = CLAUDE_FLAGS_NEEDED.filter((f) => !listed.has(f));
+    add({ name: 'claude flags', ok: h.ok && missing.length === 0, detail: missing.length === 0 ? 'all needed flags listed' : `not listed: ${missing.join(', ')}` });
+  }
+
+  const failed = checks.filter((c) => !c.ok && !c.warnOnly).length;
+  const warned = checks.filter((c) => !c.ok && c.warnOnly).length;
+  out(`\n${failed === 0 ? 'doctor: OK' : `doctor: ${failed} failed`}${warned ? `, ${warned} warning(s)` : ''}`);
+  return failed === 0;
+}

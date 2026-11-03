@@ -11,7 +11,9 @@
 | 2026-11-03 | Everything in §6 is approved. The plugin uses the official **`@logseq/libs`** and the same build setup as logseq-panes-mode: webpack 5 + ts-loader + TypeScript 5, with CSS imported as strings. **Version still to confirm:** panes-mode uses `^0.0.17` (npm `latest`); the proposal is exact `0.3.4` (§6). |
 | 2026-11-03 | Reference read so far: panes-mode's public repo and its `logseqAPI.instructions.md`. Still missing: the other git-ignored `.github/instructions/*.instructions.md` files (project context, DOM notes). |
 | 2026-11-03 | **Coding waits** for your go-ahead. |
-| open | Q5 voice edits, Q6 trigger, Q7 D approval (defaults in §3). |
+| 2026-11-03 | Bridge tokens live in `secrets/tokens.json` (0600, in the 0700 data dir), not the Keychain. The plugin's copy sits in Logseq's plain-text plugin settings anyway, and writing to the Keychain with the `security` command would put the token in process arguments. API keys (step 4) go in the Keychain. |
+| 2026-11-03 | Step 1 is split into 1a, 1b and 1c so each part can be tested on its own. |
+| open | Q5 voice edits, Q6 trigger, Q7 D approval (defaults in §3). `@logseq/libs` version (0.3.4 proposed). |
 
 An AI chat panel inside Logseq DB (desktop, macOS) for personal use. It has a
 local Node "bridge", graph tools built on the `logseq` CLI, privacy filtering in
@@ -409,10 +411,14 @@ shell, file tools, web tools or raw CLI access.
 - **CLI safety:** calls use `execFile` with an argument array. A hard-coded
   subcommand allowlist covers `list *`, `search *`, `show`, `query`,
   `upsert block|page|task|tag|property` and `remove block`. It never includes
-  `graph`, `server`, `sync`, `login`, `logout`, `agent` or `skill install`. To
-  stop text starting with `-` from being parsed as a flag, content goes through
-  `--blocks-file` (a 0600 temp file) or `--flag=value`. Which forms the CLI
-  accepts gets tested in step 1.
+  `graph`, `server`, `sync`, `login`, `logout`, `agent` or `skill install`.
+  Each subcommand also has an option allowlist.
+  **Every option goes in one argv element, `--key=value`** (implemented in step
+  1a). The CLI's parser (`cli/lib/cli_parse.ml`) reads `--key value` as a new
+  option whenever the value starts with `-`. That means model or note text such
+  as `--graph=Other` could inject an option. With `--key=value`, everything
+  after the first `=` is the value. No positional arguments are ever passed,
+  and the child process gets a minimal environment (no API keys).
 - **Writes:** the target must be visible at the requester's locality. Content
   written by a model gets `--update-tags '["AI-GENERATED"]'`; the tag is created
   once during setup, with your approval. Every write runs `--dry-run` first,
@@ -630,7 +636,9 @@ text to a cloud model. Step 0 is new.
 | Step | Deliverable | How you test it |
 |---|---|---|
 | 0 | Fact check on your Mac (read-only commands, §8) and a **sandbox DB graph** you create in Logseq | You paste the outputs |
-| 1 | Bridge core: server, tokens, event log, `claude -p` provider, **read-only** tools, deny list and `#private` filter, transcripts, audit log, `doctor` | `node --test`; `doctor`; `curl` a chat against the sandbox graph |
+| 1a ✅ | Bridge skeleton: server with Host, Origin and token checks, tokens, event log, SSE and long-poll, transcripts, audit log, safe CLI wrapper, echo test provider, `doctor` | `docs/TESTING.md` §1a: `node --test`, `doctor`, `curl` |
+| 1b | **Read-only** graph tools, plus the deny list and `#private` filter (needs the doctor output and the CLI help texts) | `node --test`; tool calls against the sandbox graph via a debug endpoint |
+| 1c | `claude -p` provider and the MCP endpoint, with the exact command line in §4.6 | `doctor --live-claude`; a real chat over `curl` |
 | 2 | Plugin panel injected into the DOM: side setting, pickers, streaming, "…" indicator, tool steps, page and selection context | `npm run build`; load unpacked in Logseq; confirm the plugin origin in DevTools; chat |
 | 3 | Writes: dry-run preview and approval cards, `#AI-GENERATED`, all allow/deny entry types, `writeGraphs` | Approve and reject writes in the sandbox graph |
 | 4 | Anthropic and OpenAI API providers, with keys in the Keychain | Switch providers mid-chat |
@@ -650,7 +658,7 @@ text to a cloud model. Step 0 is new.
 | `@types/node` (dev only, in `bridge/`) | Editor type checking of Node APIs; nothing at runtime | no types in the editor | step 1 (**covered by the TypeScript approval**) |
 | Create a sandbox graph | Writes are tested off your real graph | test on the real graph (not recommended) | step 0 |
 | Create the `AI-GENERATED`, `AIChat` and `AI` tags or pages | Tags must exist before use | none (the first write in each graph) | steps 3, 6, 7 |
-| Keychain items | API keys and bridge tokens | a 0600 file (worse) | steps 1, 4 |
+| Keychain items | API keys | a 0600 file (worse) | step 4 |
 | **Ollama** app and models (e.g. a Gemma 4 26B-A4B tag, about 15 GB) | Local model | API and `claude` only | step 5 |
 | `OLLAMA_NO_CLOUD=1` or `disable_ollama_cloud` (a setting) | Hard block on Ollama cloud | the bridge's own name filter only | step 5 |
 | Mic and speech recognition permission for the helper (TCC prompts) | Voice | MacWhisper dictation into the panel | step 8 |
