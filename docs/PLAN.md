@@ -1,4 +1,17 @@
-# Logseq AI: plan v0.1 (proposal, waiting for approval)
+# Logseq AI: plan v0.2
+
+## Decisions log
+
+| Date | Decision |
+|---|---|
+| 2026-11-03 | Panel is **injected into Logseq's DOM**, not shown as a plugin iframe (§4.3). |
+| 2026-11-03 | The bridge targets **Node 26** and is written in **TypeScript run directly by Node** (type stripping, no build step). It has no runtime dependencies. |
+| 2026-11-03 | Transport stays **HTTP + SSE**. Node 26 adds WebSocket masking helpers but still has no WebSocket server (§4.2). |
+| 2026-11-03 | Q4 allow/deny defaults accepted as proposed (§3). |
+| 2026-11-03 | Everything in §6 is approved. The plugin uses the official **`@logseq/libs`** and the same build setup as logseq-panes-mode: webpack 5 + ts-loader + TypeScript 5, with CSS imported as strings. **Version still to confirm:** panes-mode uses `^0.0.17` (npm `latest`); the proposal is exact `0.3.4` (§6). |
+| 2026-11-03 | Reference read so far: panes-mode's public repo and its `logseqAPI.instructions.md`. Still missing: the other git-ignored `.github/instructions/*.instructions.md` files (project context, DOM notes). |
+| 2026-11-03 | **Coding waits** for your go-ahead. |
+| open | Q5 voice edits, Q6 trigger, Q7 D approval (defaults in §3). |
 
 An AI chat panel inside Logseq DB (desktop, macOS) for personal use. It has a
 local Node "bridge", graph tools built on the `logseq` CLI, privacy filtering in
@@ -33,9 +46,13 @@ Status: research only. No code yet. Researched on 2026-11-03 against:
 | CLI internals | The `logseq` CLI (written in OCaml/Melange) talks to a local **db-worker HTTP server** on 127.0.0.1. It finds the app's own server or starts one. That is why its writes show up live. | `cli/lib/server_runtime.ml`, `transport.ml` |
 | Comments / reactions in the CLI | **No comment or reaction command**, and no `--assignee` option. Logseq's own agent toggles the `eyes` reaction through an internal db-worker op (`toggle-reaction`), not through a CLI command. Comments are blocks tagged `logseq.class/Comment` ("Comment") inside a block tagged `logseq.class/Comments`, linked from the target with `logseq.property.comments/blocks`. | `cli/lib/agent.ml`, `deps/db/.../class.cljs` |
 | How Logseq's agent finds work | It subscribes to the db-worker's `/v1/events` stream (`sync-db-changes`). It does not poll. A comment matches when it is tagged Comment and contains `[[agent-name]]` or references that page. | `cli/lib/agent.ml` |
-| Plugin iframe origin | Plugins load from **`lsp://logseq.io/...`** by default. They load from `lsp://logseq.com/...` (the app's own origin) only if the manifest sets `effect: true`. The `lsp:` scheme is registered as standard, secure, CORS-enabled and fetch-capable. **Confirm in DevTools.** | `libs/src/LSPlugin.core.ts`, `src/electron/electron/core.cljs` |
+| Plugin iframe origin | It depends on how the plugin is installed. Marketplace installs load from `lsp://logseq.io/plugins/...` unless the manifest sets `effect: true`. **Unpacked (dev) plugins load from `lsp://logseq.com/external/...`**, the app's own origin, unless `effect: false`. That's why `parent.document` works, as in logseq-panes-mode. The `lsp:` scheme is registered as standard, secure, CORS-enabled and fetch-capable. **Confirm in DevTools.** | `libs/src/LSPlugin.core.ts`, `src/electron/electron/core.cljs` |
 | Ollama context | Default context depends on VRAM: **< 24 GiB → 4k**, 24–48 GiB → 32k, ≥ 48 GiB → 256k. A 24 GB Mac gives the GPU less than 24 GiB, so expect 4k. We set `options.num_ctx` on every request. | ollama `docs/context-length.mdx` |
 | Ollama cloud | Cloud tags look like `gemma4:cloud`. There is an official switch: `OLLAMA_NO_CLOUD=1`, or `"disable_ollama_cloud": true` in `~/.ollama/server.json` (it's a settings change, so it needs approval). | ollama `docs/cloud.mdx`, `docs/faq.mdx` |
+| `@logseq/libs` on npm | Official (maintainers use `@logseq.com` addresses). **`latest` is the old 0.0.17.** The DB-era SDK is the **`next` tag, 0.3.4** (2026-06-24), which matches the libs version on Logseq's `main`. A plain `npm install @logseq/libs` installs the wrong one, so we pin an exact version. | `npm view @logseq/libs` |
+| Node 26 | Node 26 is LTS. It has a global `WebSocket` **client** and `http.websocketMask/Unmask` helpers (26.12.0), but **no WebSocket server**. TypeScript type stripping is **stable** and on by default. | nodejs/node `doc/api`, `CHANGELOG_V26.md` |
+| `logseqAPI.instructions.md` | Useful map of the SDK's UI and editor methods. A few entries describe **file-graph** behavior ("page file", `prop::` properties, namespaces). In DB graphs, graph reads and writes go through the CLI; the SDK is used only for UI and editor actions such as `pushState`, `scrollToBlockInPage`, `getSelectedBlocks`, `insertAtEditingCursor` and `registerUIItem`. | your upload |
+| `provideUI` | Templates go through DOMPurify, which **allows `<img>` and `<iframe>`**. Events are forwarded only as `value`/`id`/`className`/`dataset`, with **no `key`** for keyboard events, so templates can't handle Enter-to-send. | `libs/src/common.ts` |
 
 ---
 
@@ -123,7 +140,7 @@ Notes:
 
 ## 3. Questions for you (proposed defaults in bold)
 
-**Q4. Allow/deny list entries and precedence**
+**Q4. Allow/deny list entries and precedence. Decided: the defaults below.**
 
 - Entry types:
   - `page:` exact title, covering the page and all its blocks
@@ -171,50 +188,76 @@ since there's no CLI reaction command anyway.
 
 ### 4.1 File layout
 
+The bridge is TypeScript run directly by Node 26: `.ts` files, erasable syntax
+only (no `enum`, `namespace` or parameter properties), `import type`, and
+explicit `.ts` import extensions. A `tsconfig.json` (`noEmit`,
+`erasableSyntaxOnly`, `allowImportingTsExtensions`, `verbatimModuleSyntax`) is
+there only for editor checking. It has no runtime dependencies; `@types/node` is
+the only dev dependency. Tests use `node --test`. The bridge refuses to start on
+Node < 26.
+
+The plugin copies logseq-panes-mode's setup:
+
+- `webpack.config.js`: entry `src/index.ts` → `build/index.js` (UMD), `ts-loader`,
+  `.css`/`.svg` imported as `asset/source`.
+- `index.html` loads `./build/index.js`; `package.json` has a `logseq` manifest
+  block and `main: index.html`.
+- `npm run dev` runs webpack in watch mode; `npm run build` makes the
+  production bundle.
+
+Differences from panes-mode:
+
+- `@logseq/libs` pinned to an exact version, with `package-lock.json`
+  committed.
+- `"strict": true` in `tsconfig.json`.
+
 ```
 logseq-llm/
 ├─ README.md
 ├─ docs/
 │  ├─ PLAN.md                 this file
 │  └─ TESTING.md              manual test script per step (grows per step)
-├─ bridge/                    Node 20, built-ins only, plain ESM JS + JSDoc (// @ts-check)
-│  ├─ package.json            "type": "module", no dependencies
-│  ├─ bin/logseq-ai-bridge.js entry: start | doctor | print-token | rotate-token
+├─ bridge/                    Node 26, built-ins only, TypeScript via type stripping
+│  ├─ package.json            "type": "module", engines node >=26, no runtime dependencies
+│  ├─ tsconfig.json           editor type-checking only (noEmit)
+│  ├─ bin/logseq-ai-bridge.ts entry: start | doctor | print-token | rotate-token
 │  ├─ prompts/                system prompts (Logseq CLI rules from `logseq skill show`, untrusted-data rules)
 │  ├─ src/
-│  │  ├─ config.js            loads <data>/config.json (port, graph, policy, providers)
-│  │  ├─ server.js            http server: Host/Origin/token checks, routing, CORS
-│  │  ├─ events.js            per-chat event log → SSE stream and JSON long-poll
-│  │  ├─ auth.js              tokens (crypto.randomBytes), timingSafeEqual, scopes
-│  │  ├─ keychain.js          wraps /usr/bin/security via execFile
-│  │  ├─ chats/store.js       provider-neutral transcripts (JSONL), chat metadata
-│  │  ├─ chats/router.js      turn loop, model switching, escalation, consent
-│  │  ├─ policy/policy.js     allow/deny + #private + ai-access → hidden | local | cloud
-│  │  ├─ policy/redact.js     prune hidden subtrees, redact refs to hidden nodes
-│  │  ├─ tools/cli.js         the ONLY code that runs `logseq` (execFile, subcommand allowlist)
-│  │  ├─ tools/registry.js    tool definitions (JSON Schema), shared by all providers
-│  │  ├─ tools/read.js        search, show page/block, list tasks/pages, backlinks
-│  │  ├─ tools/write.js       dry-run → approval card → apply → audit
-│  │  ├─ tools/editor.js      actions the plugin performs (open page, scroll to block)
-│  │  ├─ mcp/http-mcp.js      minimal MCP server (JSON-RPC over HTTP) for claude -p
-│  │  ├─ providers/claude-cli.js
-│  │  ├─ providers/anthropic.js
-│  │  ├─ providers/openai.js
-│  │  ├─ providers/ollama.js
-│  │  ├─ worker/d-worker.js   @ai comments and #Task assignments
-│  │  └─ audit.js             append-only audit log (provider, model, block UUIDs sent, writes)
+│  │  ├─ config.ts            loads <data>/config.json (port, graph, policy, providers)
+│  │  ├─ server.ts            http server: Host/Origin/token checks, routing, CORS
+│  │  ├─ events.ts            per-chat event log → SSE stream and JSON long-poll
+│  │  ├─ auth.ts              tokens (crypto.randomBytes), timingSafeEqual, scopes
+│  │  ├─ keychain.ts          wraps /usr/bin/security via execFile
+│  │  ├─ chats/store.ts       provider-neutral transcripts (JSONL), chat metadata
+│  │  ├─ chats/router.ts      turn loop, model switching, escalation, consent
+│  │  ├─ policy/policy.ts     allow/deny + #private + ai-access → hidden | local | cloud
+│  │  ├─ policy/redact.ts     prune hidden subtrees, redact refs to hidden nodes
+│  │  ├─ tools/cli.ts         the ONLY code that runs `logseq` (execFile, subcommand allowlist)
+│  │  ├─ tools/registry.ts    tool definitions (JSON Schema), shared by all providers
+│  │  ├─ tools/read.ts        search, show page/block, list tasks/pages, backlinks
+│  │  ├─ tools/write.ts       dry-run → approval card → apply → audit
+│  │  ├─ tools/editor.ts      actions the plugin performs (open page, scroll to block)
+│  │  ├─ mcp/http-mcp.ts      minimal MCP server (JSON-RPC over HTTP) for claude -p
+│  │  ├─ providers/claude-cli.ts
+│  │  ├─ providers/anthropic.ts
+│  │  ├─ providers/openai.ts
+│  │  ├─ providers/ollama.ts
+│  │  ├─ worker/d-worker.ts   @ai comments and #Task assignments
+│  │  └─ audit.ts             append-only audit log (provider, model, block UUIDs sent, writes)
 │  └─ test/                   node --test, with a fake `logseq` executable
-├─ plugin/                    loaded via "Load unpacked plugin"; no build step
-│  ├─ package.json            Logseq plugin manifest only (no dependencies)
-│  ├─ index.html              strict CSP
-│  ├─ vendor/lsplugin.user.js copied from the installed Logseq.app (SHA-256 recorded)
-│  ├─ src/main.js             registration: toolbar button, slash/context-menu commands, settings
-│  ├─ src/panel.js            layout, side setting, pickers, composer
-│  ├─ src/bridge-client.js    fetch + SSE parser; falls back to logseq.Request long-poll
-│  ├─ src/render.js           safe Markdown renderer (no raw HTML, no remote images)
-│  ├─ src/cards.js            approval, consent and escalation cards
-│  ├─ src/context.js          current page and selected block UUIDs
-│  └─ styles/panel.css
+├─ plugin/                    webpack + ts-loader + TypeScript, like logseq-panes-mode
+│  ├─ package.json            logseq manifest + exact @logseq/libs pin; dev: webpack, ts-loader, typescript
+│  ├─ webpack.config.js       src/index.ts → build/index.js (UMD); css/svg as asset/source
+│  ├─ tsconfig.json
+│  ├─ index.html              loads ./build/index.js in the (hidden) plugin iframe
+│  ├─ src/main.ts             registration: toolbar button, slash/context-menu commands, settings
+│  ├─ src/host/mount.ts       creates/re-attaches the panel inside Logseq's DOM (all host selectors here)
+│  ├─ src/host/styles.ts      provideStyle CSS, scoped to #lsai-panel, using Logseq CSS variables
+│  ├─ src/panel/*.ts          layout, side setting, pickers, composer, message list, tool steps
+│  ├─ src/panel/render.ts     safe renderer: createElement/textContent only, no remote media
+│  ├─ src/panel/cards.ts      approval, consent and escalation cards
+│  ├─ src/bridge-client.ts    fetch + SSE parser; falls back to logseq.Request long-poll
+│  └─ src/context.ts          current page and selected block UUIDs, DB.onChanged forwarding
 └─ voice/                     step 8: SwiftPM menu-bar helper and an .app bundle script
 ```
 
@@ -228,10 +271,15 @@ configs) and `claude-cwd/` (an empty working directory for `claude`).
 with **server-sent events** read through `fetch()` and a `ReadableStream`, not
 `EventSource`, so the request can carry an `Authorization` header.
 
-Why not WebSocket?
+Why not WebSocket? (Decided 2026-11-03.)
 
-- Node 20 has no built-in WebSocket server. We'd need `ws` (an install) or
-  hand-written frame handling.
+- Node 26 has a WebSocket client and `http.websocketMask/Unmask` helpers, but
+  still **no WebSocket server**. A server would mean writing the handshake and
+  framing ourselves (about 200 lines of security-sensitive parsing).
+- Browsers can't send an `Authorization` header on a WebSocket. With
+  fetch-based SSE they can.
+- The `logseq.Request` fallback below works with polling the same event log. It
+  can't do WebSocket.
 - We only need streaming in one direction: everything the plugin sends is a
   discrete action.
 - SSE is easy to inspect with `curl -N`.
@@ -285,27 +333,62 @@ Bridge hardening:
   and `Content-Type`.
 - Bodies are JSON only, size-capped at 1 MB, with no cookies.
 
-### 4.3 Panel: iframe or injected DOM
+### 4.3 Panel: injected into Logseq's DOM (decided)
 
-| | A. Plugin iframe (`showMainUI` + `setMainUIInlineStyle`) | B. Inject into Logseq's DOM (`provideUI`/`provideStyle`) |
-|---|---|---|
-| Isolation | Separate document; can't break Logseq's React tree, and Logseq can't break ours | Our nodes live in React-managed containers and can be removed or duplicated on re-render |
-| Streaming UI | Normal DOM and JS | HTML templates and `data-on-click` callbacks only; streaming means re-rendering templates |
-| Security | Strict CSP on our page blocks remote images (an exfiltration route). The default origin `lsp://logseq.io` is cross-origin to the app, so least privilege. | Real host DOM work needs `effect: true`, which gives the plugin the app's own origin and full access |
-| Fit and theme | It floats, so to avoid covering notes we reserve space with a `provideStyle` rule (e.g. `#app-container{margin-right:…}`). Theme colors come via the SDK theme mode. | Sits inside the layout and inherits theme CSS variables |
+We follow the approach of your own plugin, logseq-panes-mode (the "Thinkering
+mode" codebase):
 
-**Recommendation: A, plus a `provideStyle` space reservation and a small
-`provideUI` toolbar button.** The panel is fixed, nearly full height, and on the
-side picked in settings (right by default, or left, top, bottom). The CSS rule
-is re-provided whenever the panel opens, closes or changes side. Because the
-reserved space shrinks `#app-container` as a whole, Logseq's own right sidebar
-keeps working next to the panel. I'll revisit this after reading your reference
-folder, since you asked me to follow its approach.
+- **Host DOM access:** plugin code builds the panel directly in Logseq's
+  document through `parent.document` / `parent.window`, with real event
+  listeners. The plugin's own iframe stays hidden and only runs our code. This
+  works for a plugin loaded unpacked: per Logseq's source, unless the manifest
+  sets `effect: false`, it loads from `lsp://logseq.com/external/...`, the same
+  origin as the app. Panes-mode does the same thing.
+- **Not `provideUI` templates for the chat itself.** Templates are re-set with
+  `innerHTML` on every update. They pass DOMPurify, which still allows `<img>`
+  and `<iframe>`, and keyboard events arrive without the `key`. We use
+  `provideUI` only for the toolbar button, through
+  `App.registerUIItem('toolbar', …)` with `data-on-click` and `provideModel`,
+  as panes-mode does.
+- **Styles:** CSS files are imported as strings (webpack `asset/source`) and
+  injected with `logseq.provideStyle({key, style})`. All rules are scoped under
+  `#lsai-panel`, and they use Logseq's own CSS variables, so the panel follows
+  the theme.
+- **Placement:** fitted into the layout from your screenshot.
+  - Right (default) or left: the panel is a flex child of `#app-container`,
+    after `#right-sidebar` (or before `#left-container` using `order:-1`). The
+    page and Logseq's own right sidebar shrink to make room, so nothing is
+    covered.
+  - Top or bottom: the panel is inserted into `main#app-container-wrapper`
+    around `#app-container`. The exact layout gets checked in DevTools.
+  - Width or height is resizable. All host selectors live in one file
+    (`src/host/mount.ts`).
+- **Staying attached:** a MutationObserver puts the panel back if a Logseq
+  re-render removes it. As in panes-mode, our own planned mutations are labeled
+  so the observer doesn't react to them in a loop.
+- **Cleanup:** `logseq.beforeunload` removes the panel, the styles, the
+  observers and the listeners, so reloading the plugin during development
+  leaves nothing behind.
+- **Streaming:** text is appended incrementally to text nodes, batched per
+  animation frame. The composer is never re-rendered while you type.
+
+The trade-off we accept: our code runs with the app's own origin and access. A
+rendering bug that let note or model text become HTML would therefore run with
+the app's privileges. So the plugin follows hard rules:
+
+- Model and note text only ever goes into `textContent`. Elements are built with
+  `createElement`. `innerHTML`, `outerHTML` and `insertAdjacentHTML` are
+  forbidden in `src/panel/`, and a test greps for them.
+- **No `<img>`, `<iframe>`, `<video>`, `<audio>` or `<link>` is ever created
+  from model output.** Image Markdown is shown as text. Links appear as chips
+  that show the full URL and open (with `logseq.App.openExternalLink`) only when
+  you click.
+- Block refs in answers (`[[uuid]]`) become chips that open the block.
 
 ### 4.4 Where the allow/deny lists are enforced
 
 **In one place: the bridge's tool layer.** Every graph read by any model goes
-through `tools/*.js` → `cli.js` → `policy.js`/`redact.js`. No model ever gets a
+through `tools/*.ts` → `cli.ts` → `policy.ts`/`redact.ts`. No model ever gets a
 shell, file tools, web tools or raw CLI access.
 
 - **Locality per request:** `cloud` for `claude`, the Anthropic API and OpenAI;
@@ -412,7 +495,7 @@ exits. The token is in a file so it doesn't show up in `ps`.
   (it breaks `--resume`). Claude Code keeps its own session files under
   `~/.claude/projects/<claude-cwd>`. "Delete chat" also removes that
   session's file.
-- **`doctor` command:** `node bridge/bin/logseq-ai-bridge.js doctor` runs one
+- **`doctor` command:** `node bridge/bin/logseq-ai-bridge.ts doctor` runs one
   tiny `claude -p` turn with these flags. It checks that the Pro login works
   under `--restricted` and that the init event lists only our tools.
 
@@ -531,8 +614,9 @@ creating a real Comment block gets tested in a sandbox graph.
   it.
 - **No hidden network requests from the panel:** the renderer never loads remote
   images (`![](https://…?q=secret)` is a classic leak) and never renders raw
-  HTML. Links show their full URL and open only when you click. The CSP has
-  `img-src 'self' data:` and `connect-src` set to the bridge only.
+  HTML. Links show their full URL and open only when you click. The panel
+  lives in Logseq's own page, so we can't set its CSP; these rules are enforced
+  in `render.ts` (§4.3).
 - **Audit:** the log records what was sent where, by UUID. It doesn't store the
   content.
 
@@ -547,7 +631,7 @@ text to a cloud model. Step 0 is new.
 |---|---|---|
 | 0 | Fact check on your Mac (read-only commands, §8) and a **sandbox DB graph** you create in Logseq | You paste the outputs |
 | 1 | Bridge core: server, tokens, event log, `claude -p` provider, **read-only** tools, deny list and `#private` filter, transcripts, audit log, `doctor` | `node --test`; `doctor`; `curl` a chat against the sandbox graph |
-| 2 | Plugin panel: side setting, pickers, streaming, "…" indicator, tool steps, page and selection context | Load unpacked in Logseq; confirm the iframe origin; chat |
+| 2 | Plugin panel injected into the DOM: side setting, pickers, streaming, "…" indicator, tool steps, page and selection context | `npm run build`; load unpacked in Logseq; confirm the plugin origin in DevTools; chat |
 | 3 | Writes: dry-run preview and approval cards, `#AI-GENERATED`, all allow/deny entry types, `writeGraphs` | Approve and reject writes in the sandbox graph |
 | 4 | Anthropic and OpenAI API providers, with keys in the Keychain | Switch providers mid-chat |
 | 5 | Ollama provider and model (**needs approval**), escalation, consent cards, consult mode | Local chat → escalate → review what's sent |
@@ -562,7 +646,8 @@ text to a cloud model. Step 0 is new.
 | Item | Why | No-install alternative | When |
 |---|---|---|---|
 | Logseq **Developer mode** (a setting) | Needed for "Load unpacked plugin" | none | step 2 |
-| `npm install @logseq/libs` and Vite/TypeScript | SDK typings and bundling | **Default:** a vendored copy of `lsplugin.user.js` from your Logseq.app, plain JS, no build | step 2 |
+| `npm install` in `plugin/`: `@logseq/libs` (exact pin), `webpack`, `webpack-cli`, `ts-loader`, `typescript` (as in panes-mode) | SDK and bundling | a vendored `lsplugin.user.js`, no build | step 2 (**approved**) |
+| `@types/node` (dev only, in `bridge/`) | Editor type checking of Node APIs; nothing at runtime | no types in the editor | step 1 (**covered by the TypeScript approval**) |
 | Create a sandbox graph | Writes are tested off your real graph | test on the real graph (not recommended) | step 0 |
 | Create the `AI-GENERATED`, `AIChat` and `AI` tags or pages | Tags must exist before use | none (the first write in each graph) | steps 3, 6, 7 |
 | Keychain items | API keys and bridge tokens | a 0600 file (worse) | steps 1, 4 |
@@ -583,9 +668,13 @@ Mirror (it stays off).
 - **Local Network Access:** the plugin iframe's `fetch` to 127.0.0.1 might be
   blocked by Chromium's Local Network Access rules. The fallback is the
   `logseq.Request` long-poll (§4.2).
-- **Main UI behavior:** we need to see how Logseq's main-UI iframe handles focus
-  and Esc while the panel stays open. If it doesn't fit, the fallback is
-  option B for the shell.
+- **DOM injection:**
+  - whether `#app-container` tolerates an extra flex child across Logseq
+    re-renders (the MutationObserver re-attaches it)
+  - how top and bottom placement fits `main#app-container-wrapper`
+  - Logseq's keyboard shortcuts firing while you type in the panel (we stop
+    key events from reaching them while the composer has focus)
+  - selectors changing in future Logseq versions (all of them are in one file)
 - **CLI details:**
   - the CLI's handling of values that start with `-`
   - its JSON output shape
@@ -599,8 +688,10 @@ Mirror (it stays off).
 
 ## 8. What I need from your Mac (all read-only)
 
-**A. Reference folder.** Attach its files in chat. Don't commit them here,
-because this repo is public.
+**A. Reference folder.** Done: logseq-panes-mode's public repo and
+`logseqAPI.instructions.md`. Still missing: the other git-ignored
+`.github/instructions/*.instructions.md` files (project context, DOM notes).
+Attach them in chat. Don't commit them here, because this repo is public.
 
 **B. Command outputs.** The exact commands are in the chat message that came
 with this plan. They cover:
@@ -610,6 +701,7 @@ with this plan. They cover:
   `show`, `search block`, `list task`, `query`, `upsert block`, `upsert task`
   and `remove block`
 - a JSON `show` of one harmless page
-- where `lsplugin.user.js` sits in the app bundle
+- `which -a node` and `node --version` (the bridge needs Node ≥ 26; the
+  brief listed Node 20.16.0 at `/usr/local/bin/node`)
 - MacWhisper's `Info.plist` URL types, App Intents metadata, `.sdef` and
   bundled binaries
