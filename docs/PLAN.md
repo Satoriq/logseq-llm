@@ -19,6 +19,8 @@
 | 2026-11-03 | Unknown `ai-access` values hide the block (fail closed), and so do blocks whose page can't be resolved. A hidden page answers like a missing page. |
 | 2026-11-03 | `claude -p` runs **one process per turn** and continues the chat with `--resume`; that's simpler and cheaper on battery than a long-lived process. Input goes in on stdin (`--input-format text`), so prompts aren't visible in `ps`. The bridge strips `ANTHROPIC_API_KEY` from the child environment and warns if `apiKeySource` isn't `none`. |
 | 2026-11-03 | When a chat switches into Claude, the bridge passes along the user's messages and earlier cloud replies only. Replies from local models stay local until the step-5 consent card exists. |
+| 2026-11-03 | Plugin build: webpack 5.111.1, webpack-cli 7.2.3, ts-loader 9.6.2, TypeScript 5.9.3, `@logseq/libs` 0.3.4. All pinned exactly with a lockfile and installed with `--ignore-scripts`; none of them has install scripts. Newer webpack releases were skipped because they were under two weeks old. |
+| 2026-11-03 | The panel's fallback transport, if the iframe can't fetch 127.0.0.1, is `logseq.Net.request`. Logseq makes the request itself, and events are long-polled. Top and bottom placements float over the page; left and right are flex children of `#app-container`. Panel state lives in the plugin's settings, not in `localStorage` (which the plugin shares with the app's origin). Toggle shortcut: ⌘⌥A. |
 | open | Q5 voice edits, Q6 trigger, Q7 D approval (defaults in §3). |
 
 An AI chat panel inside Logseq DB (desktop, macOS) for personal use. It has a
@@ -645,7 +647,7 @@ text to a cloud model. Step 0 is new.
 | 1a ✅ | Bridge skeleton: server with Host, Origin and token checks, tokens, event log, SSE and long-poll, transcripts, audit log, safe CLI wrapper, echo test provider, `doctor` | `docs/TESTING.md` §1a: `node --test`, `doctor`, `curl` |
 | 1b ✅ | **Read-only** graph tools, the full allow/deny rules, `#private` and `ai-access::`, ref redaction, the open-graph guard, and the `tool` command | `docs/TESTING.md` §1b |
 | 1c ✅ | `claude -p` provider and the `/mcp` endpoint (per-turn tokens, read tools filtered as cloud), the startup guard, context, handoff, `check-claude` | `docs/TESTING.md` §1c |
-| 2 | Plugin panel injected into the DOM: side setting, pickers, streaming, "…" indicator, tool steps, page and selection context | `npm run build`; load unpacked in Logseq; confirm the plugin origin in DevTools; chat |
+| 2 ✅ | Plugin panel injected into the DOM: side setting, pickers, streaming, "…" indicator, tool steps, page and block context, safe renderer | `docs/TESTING.md` §2 |
 | 3 | Writes: dry-run preview and approval cards, `#AI-GENERATED`, all allow/deny entry types, `writeGraphs` | Approve and reject writes in the sandbox graph |
 | 4 | Anthropic and OpenAI API providers, with keys in the Keychain | Switch providers mid-chat |
 | 5 | Ollama provider and model (**needs approval**), escalation, consent cards, consult mode | Local chat → escalate → review what's sent |

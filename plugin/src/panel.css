@@ -1,0 +1,208 @@
+/* Logseq AI panel. Everything is scoped under #lsai-panel and uses Logseq's theme variables,
+   so it follows light/dark mode and custom themes. */
+
+#lsai-panel {
+  --lsai-bg: var(--ls-primary-background-color, #fff);
+  --lsai-bg2: var(--ls-secondary-background-color, #f4f5f7);
+  --lsai-bg3: var(--ls-tertiary-background-color, #e9ebef);
+  --lsai-fg: var(--ls-primary-text-color, #1f2328);
+  --lsai-fg2: var(--ls-secondary-text-color, #5b6270);
+  --lsai-border: var(--ls-border-color, #d8dbe0);
+  --lsai-link: var(--ls-link-text-color, #2563eb);
+  --lsai-good: #16a34a;
+  --lsai-bad: #dc2626;
+
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  background: var(--lsai-bg);
+  color: var(--lsai-fg);
+  font-size: 14px;
+  line-height: 1.5;
+  position: relative;
+  min-width: 0;
+  z-index: 9;
+}
+#lsai-panel *,
+#lsai-panel *::before,
+#lsai-panel *::after { box-sizing: border-box; }
+#lsai-panel.lsai-hidden { display: none !important; }
+
+/* Right / left: a flex child of #app-container, full height, takes space instead of covering. */
+#lsai-panel.lsai-side-right,
+#lsai-panel.lsai-side-left {
+  flex: 0 0 var(--lsai-size, 420px);
+  width: var(--lsai-size, 420px);
+  height: 100vh;
+}
+#lsai-panel.lsai-side-right { border-left: 1px solid var(--lsai-border); }
+#lsai-panel.lsai-side-left { order: -1; border-right: 1px solid var(--lsai-border); }
+/* Keep clear of the macOS window buttons when the panel is on the left. */
+html.is-mac #lsai-panel.lsai-side-left .lsai-head { padding-top: 40px; }
+
+/* Top / bottom: float over the page at full width. */
+#lsai-panel.lsai-side-top,
+#lsai-panel.lsai-side-bottom {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  height: var(--lsai-size, 360px);
+  border: 1px solid var(--lsai-border);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  z-index: 999;
+}
+#lsai-panel.lsai-side-top { top: 44px; }
+#lsai-panel.lsai-side-bottom { bottom: 12px; }
+
+/* Resize handle on the inner edge. */
+#lsai-panel .lsai-resize { position: absolute; z-index: 2; background: transparent; }
+#lsai-panel .lsai-resize:hover { background: var(--lsai-border); }
+#lsai-panel.lsai-side-right .lsai-resize { left: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; }
+#lsai-panel.lsai-side-left .lsai-resize { right: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; }
+#lsai-panel.lsai-side-top .lsai-resize { bottom: -3px; left: 0; right: 0; height: 6px; cursor: row-resize; }
+#lsai-panel.lsai-side-bottom .lsai-resize { top: -3px; left: 0; right: 0; height: 6px; cursor: row-resize; }
+
+#lsai-panel .lsai-head {
+  padding: 10px 12px 6px;
+  border-bottom: 1px solid var(--lsai-border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  -webkit-app-region: no-drag;
+}
+#lsai-panel .lsai-row { display: flex; gap: 6px; align-items: center; min-width: 0; }
+#lsai-panel .lsai-select {
+  flex: 1 1 0;
+  min-width: 0;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--lsai-fg);
+  background: var(--lsai-bg2);
+  border: 1px solid var(--lsai-border);
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+#lsai-panel .lsai-chat { font-weight: 600; }
+#lsai-panel .lsai-row .lsai-provider { flex-grow: 1.7; }
+#lsai-panel .lsai-icon {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--lsai-fg2);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+#lsai-panel .lsai-icon:hover { background: var(--lsai-bg2); color: var(--lsai-fg); }
+#lsai-panel .lsai-status { font-size: 11.5px; color: var(--lsai-fg2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#lsai-panel .lsai-status.lsai-good { color: var(--lsai-good); }
+#lsai-panel .lsai-status.lsai-bad { color: var(--lsai-bad); }
+
+#lsai-panel .lsai-log {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+#lsai-panel .lsai-empty { color: var(--lsai-fg2); font-size: 13px; margin: auto 8px; text-align: center; }
+#lsai-panel .lsai-setup { background: var(--lsai-bg2); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+#lsai-panel .lsai-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
+
+#lsai-panel .lsai-msg { max-width: 100%; overflow-wrap: anywhere; }
+#lsai-panel .lsai-user {
+  align-self: flex-end;
+  background: var(--lsai-bg3);
+  border-radius: 12px 12px 2px 12px;
+  padding: 7px 11px;
+  white-space: pre-wrap;
+  max-width: 88%;
+}
+#lsai-panel .lsai-assistant { align-self: stretch; }
+#lsai-panel .lsai-meta { font-size: 11px; color: var(--lsai-fg2); margin-bottom: 2px; }
+#lsai-panel .lsai-body > :first-child { margin-top: 0; }
+#lsai-panel .lsai-body > :last-child { margin-bottom: 0; }
+#lsai-panel .lsai-body p { margin: 0 0 8px; }
+#lsai-panel .lsai-plain { white-space: pre-wrap; }
+#lsai-panel .lsai-h { margin: 10px 0 4px; font-size: 14.5px; }
+#lsai-panel .lsai-list { margin: 0 0 8px; padding-left: 1.3em; }
+#lsai-panel .lsai-quote { margin: 0 0 8px; padding-left: 10px; border-left: 3px solid var(--lsai-border); color: var(--lsai-fg2); }
+#lsai-panel .lsai-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; background: var(--lsai-bg2); padding: 0 4px; border-radius: 4px; }
+#lsai-panel .lsai-pre { background: var(--lsai-bg2); padding: 8px 10px; border-radius: 6px; overflow-x: auto; margin: 0 0 8px; font-size: 12.5px; }
+#lsai-panel .lsai-muted, #lsai-panel .lsai-url { color: var(--lsai-fg2); font-size: 12px; }
+#lsai-panel .lsai-chip {
+  display: inline;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--lsai-link);
+  background: var(--lsai-bg2);
+  border: 1px solid var(--lsai-border);
+  border-radius: 5px;
+  padding: 0 5px;
+  margin: 0 1px;
+  cursor: pointer;
+}
+#lsai-panel .lsai-chip:hover { border-color: var(--lsai-link); }
+
+#lsai-panel .lsai-steps { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 6px; }
+#lsai-panel .lsai-step { font-size: 12px; color: var(--lsai-fg2); }
+#lsai-panel .lsai-step.lsai-ok { color: var(--lsai-fg2); }
+#lsai-panel .lsai-step.lsai-fail { color: var(--lsai-bad); }
+#lsai-panel .lsai-dots { color: var(--lsai-fg2); font-size: 18px; letter-spacing: 2px; animation: lsai-pulse 1.2s ease-in-out infinite; }
+#lsai-panel .lsai-dots[hidden] { display: none; }
+@keyframes lsai-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+#lsai-panel .lsai-notice { font-size: 12px; color: var(--lsai-fg2); background: var(--lsai-bg2); border-radius: 6px; padding: 4px 8px; margin-top: 4px; }
+#lsai-panel .lsai-error { font-size: 12.5px; color: var(--lsai-bad); background: var(--lsai-bg2); border-radius: 6px; padding: 4px 8px; margin-top: 4px; }
+
+#lsai-panel .lsai-foot { border-top: 1px solid var(--lsai-border); padding: 8px 12px 10px; display: flex; flex-direction: column; gap: 6px; }
+#lsai-panel .lsai-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+#lsai-panel .lsai-chips:empty { display: none; }
+#lsai-panel .lsai-ctx {
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--lsai-fg2);
+  background: transparent;
+  border: 1px dashed var(--lsai-border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#lsai-panel .lsai-ctx.lsai-on { color: var(--lsai-fg); background: var(--lsai-bg2); border-style: solid; }
+#lsai-panel .lsai-input {
+  width: 100%;
+  resize: none;
+  font: inherit;
+  color: var(--lsai-fg);
+  background: var(--lsai-bg2);
+  border: 1px solid var(--lsai-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  outline: none;
+}
+#lsai-panel .lsai-input:focus { border-color: var(--lsai-link); }
+#lsai-panel .lsai-actions { display: flex; align-items: center; gap: 6px; }
+#lsai-panel .lsai-hint { flex: 1 1 auto; font-size: 11px; color: var(--lsai-fg2); }
+#lsai-panel .lsai-send,
+#lsai-panel .lsai-stop {
+  font: inherit;
+  font-size: 12.5px;
+  border-radius: 6px;
+  padding: 4px 12px;
+  cursor: pointer;
+  border: 1px solid var(--lsai-border);
+  background: var(--lsai-fg);
+  color: var(--lsai-bg);
+}
+#lsai-panel .lsai-send:disabled { opacity: 0.45; cursor: default; }
+#lsai-panel .lsai-stop { background: transparent; color: var(--lsai-bad); border-color: var(--lsai-bad); }
+#lsai-panel .lsai-stop[hidden] { display: none; }

@@ -1,0 +1,27 @@
+{
+  "name": "logseq-ai-panel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI chat panel for Logseq DB. Talks to the local logseq-ai bridge on 127.0.0.1.",
+  "main": "index.html",
+  "license": "MIT",
+  "scripts": {
+    "dev": "webpack --mode=development --watch",
+    "build": "webpack --mode=production",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "logseq": {
+    "id": "logseq-ai-panel",
+    "title": "Logseq AI",
+    "icon": "./icon.svg"
+  },
+  "dependencies": {
+    "@logseq/libs": "0.3.4"
+  },
+  "devDependencies": {
+    "ts-loader": "9.6.2",
+    "typescript": "5.9.3",
+    "webpack": "5.111.1",
+    "webpack-cli": "7.2.3"
+  }
+}

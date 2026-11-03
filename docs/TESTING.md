@@ -342,3 +342,103 @@ Note: Claude Code keeps its own transcript of these sessions under
 `~/.claude/projects/` (in a folder named after `…/logseq-ai/claude-cwd`). That
 is your normal Claude Code history; "delete chat" will clean it up in a later
 step.
+
+## Step 2: the panel inside Logseq
+
+New in this step:
+
+- **The plugin** (`plugin/`): a chat panel built inside Logseq's own page.
+  - On the right (default) or left, it sits next to the page. The page and
+    Logseq's own right sidebar get narrower; nothing is covered.
+  - Top and bottom float over the page.
+- **In the panel:**
+  - chat picker and "＋" for a new chat
+  - provider, model and effort pickers (from the bridge)
+  - streaming replies, with a "…" indicator
+  - tool steps such as `✓ reading page "AI Test" · 2 hidden by your privacy settings`
+  - a Stop button
+- **Context:**
+  - the page you're viewing is a chip you can switch off
+  - right-click a bullet → **Ask Logseq AI about this block** pins it
+  - `/Ask Logseq AI` in a block does the same
+- **Safety:** replies render as text only. Images become `[image: …]`. Links
+  are chips that show the URL and open in your browser only when clicked.
+  `[[uuid]]` chips open the block.
+- **Toolbar:** the **AI** button, or **⌘⌥A**, toggles the panel.
+
+### 1. Build the plugin (the approved npm install)
+
+```bash
+cd "$HOME/logseq-llm" && git pull && cd plugin && npm ci --ignore-scripts && npm run build
+```
+
+`npm ci` installs exactly what `package-lock.json` lists (`@logseq/libs@0.3.4`,
+webpack 5.111.1, webpack-cli 7.2.3, ts-loader 9.6.2, TypeScript 5.9.3) and
+checks every file's hash. `--ignore-scripts` means no package code runs
+during the install; none of them needs install scripts. Expected:
+`webpack … compiled successfully`, and `plugin/build/index.js` exists.
+
+### 2. Start the bridge and copy the token
+
+```bash
+cd "$HOME/logseq-llm/bridge" && node bin/logseq-ai-bridge.ts start
+```
+
+In a second window (this copies the token to the clipboard):
+
+```bash
+cd "$HOME/logseq-llm/bridge" && node bin/logseq-ai-bridge.ts token | pbcopy
+```
+
+### 3. Load the plugin in Logseq (AI Sandbox open)
+
+1. **Settings → Advanced → Developer mode**: on (the approved setting).
+2. **Settings → Plugins → Load unpacked plugin** → choose the folder
+   `logseq-llm/plugin`.
+3. **Settings → Plugins → Logseq AI**: paste the token into **Bridge token**.
+4. Click **AI** in the toolbar (or press ⌘⌥A). The panel opens on the right
+   and shows `● Connected`.
+
+If the panel says **"The bridge refused this connection"**, it also shows the
+plugin's origin. Put that exact value into `allowedOrigins` in
+`~/Library/Application Support/logseq-ai/config.json`, then restart the bridge.
+Expected origin: `lsp://logseq.com`.
+
+### 4. Confirm the plugin origin in DevTools
+
+Open DevTools (⌥⌘I), select the **Console**, and look for:
+
+`[logseq-ai] ready; plugin origin = lsp://logseq.com`
+
+Please send me that line, whatever it says.
+
+### 5. Chat
+
+On the page **AI Test**, pick **Claude (Pro) · cloud → Sonnet → Low** and ask:
+*"What's on this page? Cite the blocks."*
+
+Expected:
+
+- `✓ reading page "AI Test" · 2 hidden by your privacy settings`
+- the reply streams in, then turns into formatted text with `↗ block` chips
+- clicking a chip opens that block
+- Claude doesn't mention "This one is secret" or "Local only note"
+
+Then switch to **Echo (test) · local** and send anything: it repeats your
+text back and uses no model.
+
+### 6. Panel behaviour
+
+- **Shortcuts:** typing in the panel must **not** trigger Logseq shortcuts. For
+  example, typing `t w` must not toggle wide mode.
+- **Resize:** drag the panel's left edge. The size is remembered.
+- **Panel side:** Settings → Plugins → Logseq AI → **Panel side**: try
+  left, top and bottom. On the left, the header stays clear of the window buttons.
+- **Pin a block:** right-click a bullet → **Ask Logseq AI about this block**. A `▦`
+  chip appears, and that block (filtered) goes with your next message.
+- **Stop:** press **Stop** during a long reply. It ends with `(cancelled)`.
+- **Reload:** close the panel (×) and reopen it. The chat is still there, loaded
+  from the bridge.
+
+To unload: Settings → Plugins → Logseq AI → disable or remove. The panel and
+its styles disappear completely.
