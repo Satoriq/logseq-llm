@@ -76,7 +76,7 @@ test('claude turn: exact flags, filtered tools over MCP, session saved, nothing 
   const events = await turn(chat.id, 'hello FAKE:tool');
   const text = textOf(events);
   assert.match(text, /Hello from fake claude \(new\)/);
-  assert.match(text, /tools=7/);
+  assert.match(text, /tools=9/); // 9 read tools (this test runs without write tools)
   assert.match(text, /Apples are red/);
   assert.ok(!text.includes('secret'), 'claude is cloud: #private content must not come through MCP');
   assert.ok(!text.includes('Local only note'));
@@ -118,7 +118,8 @@ test('claude turn: exact flags, filtered tools over MCP, session saved, nothing 
   assert.match(textOf(second), /\(resumed\)/);
   const argv2 = JSON.parse(await fakeFile('fake-claude-argv.json')) as string[];
   assert.equal(argv2[argv2.indexOf('--resume') + 1], sessionId);
-  assert.equal(await fakeFile('fake-claude-prompt.txt'), 'again');
+  // A resumed turn sends only the date line and the new message (claude keeps the history).
+  assert.match(await fakeFile('fake-claude-prompt.txt'), /^\(Today is \w+ \d{4}-\d{2}-\d{2}, \d{2}:\d{2} local time\.\)\n\nagain$/);
 });
 
 function mcpStatus(authorization: string | undefined, extra: Record<string, string> = {}): Promise<number> {

@@ -51,6 +51,20 @@ export class Policy {
     this.allow = opts.allow;
   }
 
+  /** Tags your privacy settings depend on (lower-case). Only you may add or remove them. */
+  protectedTags(): Set<string> {
+    const out = new Set<string>([PRIVATE_TAG]);
+    for (const r of [...this.deny, ...this.allow]) if (r.kind === 'tag') out.add(r.tag);
+    return out;
+  }
+
+  /** Properties your privacy settings depend on (lower-case titles). Only you may set or remove them. */
+  protectedProperties(): Set<string> {
+    const out = new Set<string>([ACCESS_PROPERTY]);
+    for (const r of [...this.deny, ...this.allow]) if (r.kind === 'property') out.add(r.name);
+    return out;
+  }
+
   evaluate(s: Subject): Verdict {
     const all = [s.node, ...s.chain];
     const page = isPage(s.node) ? s.node : s.chain.at(-1);

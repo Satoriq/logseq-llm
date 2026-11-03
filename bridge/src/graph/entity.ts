@@ -22,15 +22,51 @@ export type GNode = {
   status: string | null;
   tags: TagRef[];
   refs: Ref[];
-  /** User properties by lower-cased property title → value titles (or literal values as strings). */
+  /**
+   * For the privacy rules: lower-cased property title → raw value texts (value-block text,
+   * page/journal title, number, "true"/"false"). Covers user and public built-in properties.
+   */
   props: Map<string, string[]>;
+  /** The same properties with types and link targets, for display and edits (graph order). */
+  properties: PropEntry[];
+  /** Milliseconds since 1970 (block/created-at, block/updated-at). */
+  createdAt: number | null;
+  updatedAt: number | null;
   /** Set for the hidden value blocks Logseq creates for text properties. */
   createdFromProperty: number | null;
   /** From a recursive parent pull: the parent chain, nearest first (the page is last). */
   parent: GNode | null;
 };
 
-export type PropertyInfo = { id: number; ident: string; title: string; type: string | null };
+export type PropertyInfo = {
+  id: number;
+  ident: string;
+  title: string;
+  /** "default", "number", "checkbox", "date", "datetime", "url", "node", ... (null if unknown). */
+  type: string | null;
+  /** Cardinality many: the value is a set. */
+  many: boolean;
+  /** Logseq's own property (logseq.property/..., block/alias), not one the user made. */
+  builtIn: boolean;
+  /** Fixed choices ("closed values"), in their order. Empty when any value is allowed. */
+  choices: { id: number; title: string }[];
+};
+
+export type PropValue = {
+  /** What the user sees: the text, number, true/false, date, or the linked page's title. */
+  text: string;
+  /** What the privacy rules compare (titles, as before; dates as the journal page title). */
+  raw: string;
+  /** A page/block/journal this value links to (checked against the privacy rules before showing). */
+  target: Ref | null;
+  /** Links inside a text value (redacted like links in block text). */
+  refs: Ref[];
+};
+
+export type PropEntry = { info: PropertyInfo; values: PropValue[] };
+
+/** Types whose values are stored inline, not as references to other entities. */
+export const INLINE_PROPERTY_TYPES: ReadonlySet<string> = new Set(['checkbox', 'datetime', 'string', 'raw-number', 'keyword', 'map', 'coll', 'any', 'json']);
 
 function obj(v: unknown): Record<string, unknown> | null {
   return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
@@ -69,9 +105,79 @@ export function resultItems(json: unknown): Record<string, unknown>[] {
   return Array.isArray(items) ? items.map(obj).filter((x): x is Record<string, unknown> => x !== null) : [];
 }
 
+function refOf(o: Record<string, unknown>): Ref | null {
+  const id = num(o['db/id']);
+  if (id === null) return null;
+  return { id, title: str(o['block/title']) ?? '', uuid: str(o['block/uuid']), isPage: str(o['block/name']) !== null || str(o['db/ident']) !== null };
+}
+
+function refsOf(v: unknown): Ref[] {
+  const out: Ref[] = [];
+  for (const r of Array.isArray(v) ? v : []) {
+    const o = obj(r);
+    const ref = o ? refOf(o) : null;
+    if (ref) out.push(ref);
+  }
+  return out;
+}
+
+function pad(n: number, w = 2): string {
+  return String(n).padStart(w, '0');
+}
+
+/** 20261105 → "2026-11-05". */
+export function formatJournalDay(day: number): string {
+  return `${Math.floor(day / 10000)}-${pad(Math.floor(day / 100) % 100)}-${pad(day % 100)}`;
+}
+
+/** Local time "2026-11-05 14:30", or just the date at midnight. */
+export function formatDateTime(ms: number): string {
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return String(ms);
+  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return d.getHours() === 0 && d.getMinutes() === 0 ? date : `${date} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function inlineText(v: unknown, type: string | null): string | null {
+  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  if (typeof v === 'number') return type === 'datetime' ? formatDateTime(v) : String(v);
+  if (typeof v === 'string') return v;
+  if (v !== null && typeof v === 'object') {
+    const j = JSON.stringify(v);
+    return j.length > 300 ? `${j.slice(0, 300)}…` : j;
+  }
+  return null;
+}
+
 /**
- * Turns a pulled map into a GNode. `props` maps property idents to their titles;
- * attributes of unknown user properties are ignored (and can't match rules).
+ * One pulled property value. A value entity Logseq made for this property (text, number, url,
+ * or one of its fixed choices) is shown as its content; anything else is a link to a real
+ * page/block/journal and keeps its target, so the privacy filter can check it.
+ */
+function propValue(v: unknown, info: PropertyInfo): PropValue | null {
+  const o = obj(v);
+  if (!o) {
+    const t = inlineText(v, info.type);
+    return t === null ? null : { text: t, raw: t, target: null, refs: [] };
+  }
+  const id = num(o['db/id']);
+  if (id === null) return null;
+  const title = str(o['block/title']);
+  const own = o['logseq.property/created-from-property'] !== undefined || o['block/closed-value-property'] !== undefined;
+  if (own || info.choices.some((c) => c.id === id)) {
+    const value = o['logseq.property/value'];
+    const text = title ?? (value !== undefined ? inlineText(value, info.type) : null) ?? '';
+    return { text, raw: text, target: null, refs: refsOf(o['block/refs']) };
+  }
+  const target = refOf(o) as Ref;
+  const day = num(o['block/journal-day']);
+  const text = day !== null ? formatJournalDay(day) : title ?? '';
+  return { text, raw: title ?? text, target, refs: [] };
+}
+
+/**
+ * Turns a pulled map into a GNode. `props` maps property idents to their info;
+ * attributes of unknown properties are ignored (and can't match rules).
  */
 export function toNode(raw: Record<string, unknown>, props: ReadonlyMap<string, PropertyInfo>): GNode | null {
   const id = num(raw['db/id']);
@@ -91,22 +197,20 @@ export function toNode(raw: Record<string, unknown>, props: ReadonlyMap<string, 
     }
   }
   const propValues = new Map<string, string[]>();
+  const properties: PropEntry[] = [];
   for (const [key, value] of Object.entries(raw)) {
-    if (!key.startsWith('user.property/')) continue;
     const info = props.get(key);
     if (!info) continue;
-    const values: string[] = [];
+    const values: PropValue[] = [];
     for (const v of Array.isArray(value) ? value : [value]) {
-      const o = obj(v);
-      if (o) {
-        const t = str(o['block/title']);
-        if (t !== null) values.push(t);
-        else if (num(o['db/id']) !== null) values.push(`#${String(o['db/id'])}`);
-      } else if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
-        values.push(String(v));
-      }
+      const pv = propValue(v, info);
+      if (pv) values.push(pv);
     }
-    propValues.set(info.title.toLowerCase(), values);
+    if (values.length === 0) continue;
+    properties.push({ info, values });
+    // Two properties can share a title (yours and a built-in one): the rules see both.
+    const k = info.title.toLowerCase();
+    propValues.set(k, [...(propValues.get(k) ?? []), ...values.map((v) => v.raw)]);
   }
   const parentRaw = obj(raw['block/parent']);
   const parentNode = parentRaw && Object.keys(parentRaw).length > 1 ? toNode(parentRaw, props) : null;
@@ -124,6 +228,9 @@ export function toNode(raw: Record<string, unknown>, props: ReadonlyMap<string, 
     tags,
     refs,
     props: propValues,
+    properties,
+    createdAt: num(raw['block/created-at']),
+    updatedAt: num(raw['block/updated-at']),
     createdFromProperty: idOf(raw['logseq.property/created-from-property']),
     parent: parentNode,
   };

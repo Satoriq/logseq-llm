@@ -100,6 +100,13 @@ function handoff(messages: StoredMessage[]): string {
 
 type ClaudeEvent = Record<string, unknown> & { type?: string; subtype?: string };
 
+/** "Today is Tuesday 2026-11-03, 14:05 local time." — for "due this week" and date properties. */
+export function todayLine(now = new Date()): string {
+  const p = (n: number): string => String(n).padStart(2, '0');
+  const day = now.toLocaleDateString('en-US', { weekday: 'long' });
+  return `(Today is ${day} ${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}, ${p(now.getHours())}:${p(now.getMinutes())} local time.)`;
+}
+
 export class ClaudeCliProvider implements Provider {
   readonly id = 'claude';
   readonly label = 'Claude (Pro, claude CLI)';
@@ -124,6 +131,7 @@ export class ClaudeCliProvider implements Provider {
     const contextUuids = last?.meta?.contextUuids ?? [];
     const context = contextUuids.length > 0 ? await o.renderContext(contextUuids, req.chatId, req.turnId) : '';
     const prompt =
+      `${todayLine()}\n\n` +
       (resume ? '' : handoff(req.messages)) +
       (context ? `The user has this open in Logseq (filtered by their privacy settings):\n<context>\n${context}\n</context>\n\n` : '') +
       (last ? messageText(last) : '');

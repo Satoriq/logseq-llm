@@ -6,6 +6,7 @@ import type { BridgeConfig, DataPaths } from './config.ts';
 import { MIN_NODE_MAJOR } from './config.ts';
 import { LogseqCli } from './tools/cli.ts';
 import type { CliResult } from './tools/cli.ts';
+import { PROPERTIES_QUERY } from './graph/reader.ts';
 
 /**
  * Read-only diagnostics. Nothing here writes to a graph or changes a setting.
@@ -29,9 +30,11 @@ const CLI_COMMANDS_USED: Record<string, string[]> = {
 
 const SAMPLE_BLOCKS_QUERY =
   '[:find (pull ?b [* {:block/tags [:db/id :db/ident :block/title]} {:block/refs [:db/id :block/title]}]) :in $ ?t :where [?p :block/title ?t] [?b :block/page ?p]]';
-const SAMPLE_PROPERTIES_QUERY =
-  '[:find (pull ?e [:db/id :db/ident :block/title :logseq.property/type]) :where [?e :db/ident ?i] [(namespace ?i) ?ns] [(= ?ns "user.property")]]';
-const SAMPLE_VALUES_QUERY = '[:find (pull ?e [:db/id :db/ident :block/title]) :in $ [?e ...]]';
+// The same property list the reader uses: types, cardinality, public flag, fixed choices.
+const SAMPLE_PROPERTIES_QUERY = PROPERTIES_QUERY;
+const SAMPLE_VALUES_QUERY =
+  '[:find (pull ?e [:db/id :db/ident :block/uuid :block/title :block/name :block/journal-day :logseq.property/value ' +
+  '{:logseq.property/created-from-property [:db/id]} {:block/closed-value-property [:db/id :block/title]}]) :in $ [?e ...]]';
 
 /** An EDN string literal. JSON's escapes (\" \\ \n \t \uXXXX) are valid EDN for ordinary text. */
 export function ednString(s: string): string {
@@ -56,11 +59,12 @@ export function userPropertyRefIds(json: unknown): number[] {
     }
     if (v === null || typeof v !== 'object') return;
     for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-      if (/^:?user\.property\//.test(k)) {
+      if (/^:?(?:user\.property|plugin\.property\.[^/]+|logseq\.property(?:\.[a-z-]+)?)\//.test(k) || /^:?block\/alias$/.test(k)) {
         for (const item of Array.isArray(val) ? val : [val]) {
           const id = idOf(item);
           if (id !== null) ids.add(id);
-          else if (typeof item === 'number' && Number.isInteger(item)) ids.add(item);
+          // Small integers may be ids; dates (ms) and other numbers are values.
+          else if (typeof item === 'number' && Number.isInteger(item) && item < 1e9) ids.add(item);
         }
       }
       walk(val);

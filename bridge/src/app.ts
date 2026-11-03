@@ -36,7 +36,7 @@ export function buildGraph(config: BridgeConfig, paths?: DataPaths, own?: OwnBlo
   const policy = new Policy({ deny: parseRules(config.policy.deny), allow: parseRules(config.policy.allow) });
   const guard = new GraphGuard({ graph: config.graph, serverList: () => cli.serverList() });
   const ensureGraph = (): Promise<void> => guard.ensure();
-  const tools = readTools({ reader, policy, ensureGraph });
+  const tools = readTools({ reader, policy, ensureGraph, propertyMode: config.readProperties });
   if (paths) {
     tools.push(
       ...writeTools({

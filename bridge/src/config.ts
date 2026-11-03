@@ -4,7 +4,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { parseRule } from './policy/rules.ts';
 
 export const BRIDGE_NAME = 'logseq-ai-bridge';
-export const BRIDGE_VERSION = '0.5.0';
+export const BRIDGE_VERSION = '0.6.0';
 export const DEFAULT_PORT = 47615;
 export const MIN_NODE_MAJOR = 26;
 
@@ -37,6 +37,13 @@ export type BridgeConfig = {
   autoApply: Record<string, AutoApplyMode>;
   /** Tag put on the top block of whatever the AI writes. Created automatically in writable graphs. */
   aiTag: string;
+  /**
+   * What reads show of block properties unless the model asks for them (properties:true):
+   *   names   "(props: priority, deadline)" on blocks that have any (default)
+   *   values  every "key:: value" line (more context per read)
+   *   off     nothing; the model can still ask, or use find_by_property / list_properties
+   */
+  readProperties: ReadPropertiesMode;
   cliTimeoutMs: number;
   cliConcurrency: number;
   /** Pass --restricted to claude (no user/project settings, no code tools). Default true. */
@@ -45,6 +52,8 @@ export type BridgeConfig = {
 };
 
 export type AutoApplyMode = 'none' | 'additions' | 'own' | 'all';
+export type ReadPropertiesMode = 'names' | 'values' | 'off';
+const READ_PROPERTY_MODES: readonly ReadPropertiesMode[] = ['names', 'values', 'off'];
 const AUTO_MODES: readonly AutoApplyMode[] = ['none', 'additions', 'own', 'all'];
 
 export type DataPaths = {
@@ -98,6 +107,7 @@ export function defaultConfig(): BridgeConfig {
     writeGraphs: [],
     autoApply: {},
     aiTag: 'ai',
+    readProperties: 'names',
     cliTimeoutMs: 15000,
     cliConcurrency: 2,
     claudeRestricted: true,
@@ -174,6 +184,10 @@ export function mergeConfig(base: BridgeConfig, raw: unknown): BridgeConfig {
     const t = input.aiTag;
     if (typeof t !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_\-/]{0,59}$/.test(t)) throw new Error('config.json: "aiTag" must be a tag name like "ai" (letters, digits, - _ /)');
     out.aiTag = t;
+  }
+  if (input.readProperties !== undefined) {
+    if (!READ_PROPERTY_MODES.includes(input.readProperties as ReadPropertiesMode)) throw new Error('config.json: "readProperties" must be "names", "values" or "off"');
+    out.readProperties = input.readProperties as ReadPropertiesMode;
   }
   if (input.autoApply !== undefined) {
     const a = input.autoApply;

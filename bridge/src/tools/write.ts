@@ -4,14 +4,15 @@ import { join } from 'node:path';
 import type { ApprovalRequest, ApprovalView } from '../approvals.ts';
 import type { AutoApplyMode } from '../config.ts';
 import type { AuditLog } from '../audit.ts';
-import { chainOf, isPage, resultItems } from '../graph/entity.ts';
-import type { GNode } from '../graph/entity.ts';
+import { chainOf, formatDateTime, formatJournalDay, isPage, resultItems } from '../graph/entity.ts';
+import type { GNode, PropEntry, PropertyInfo } from '../graph/entity.ts';
 import { ednString, GraphError, isUuid } from '../graph/reader.ts';
 import type { GraphReader } from '../graph/reader.ts';
 import { ACCESS_PROPERTY, visibleTo } from '../policy/policy.ts';
 import type { Policy } from '../policy/policy.ts';
 import { HIDDEN_MARK } from '../policy/redact.ts';
 import type { CliRequest, CliResult } from './cli.ts';
+import { canSet, parseDateTime, parseDay, resolveProperty } from './properties.ts';
 import { argString, ToolInputError } from './registry.ts';
 import type { ToolContext, ToolDef, ToolOutput } from './registry.ts';
 
@@ -31,6 +32,30 @@ const TAG_NAME_RE = /^[^\n"\\[\]]{1,80}$/;
 function tagsEdn(names: readonly string[]): string {
   return `[${names.map(ednString).join(' ')}]`;
 }
+function escapeRe(x: string): string {
+  return x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** True if the text carries the tag as #tag, #[[tag]] or [[tag]]. */
+function mentionsTag(text: string, tag: string): boolean {
+  const t = escapeRe(tag);
+  return new RegExp(`#${t}(?![\\w/-])|#?\\[\\[${t}\\]\\]`, 'i').test(text);
+}
+
+/** Only idents read from the graph get here; this is a second guard before they go into EDN. */
+const SAFE_IDENT_RE = /^[A-Za-z0-9.*+!_?<>=-]+\/[A-Za-z0-9.*+!_?<>=-]+$/;
+function ednKeyword(ident: string): string {
+  if (!SAFE_IDENT_RE.test(ident)) throw new GraphError('bad-property', 'unsafe property ident');
+  return `:${ident}`;
+}
+
+const STATUS_IDENT = 'logseq.property/status';
+
+/** A property value as the user sees it on the card (the user may see everything). */
+function cardValue(e: PropEntry): string {
+  return e.values.map((v) => (v.target?.isPage && v.target.title === v.text ? `[[${v.text}]]` : v.target && !v.target.isPage && v.target.uuid ? `((${v.target.uuid}))` : v.text)).join(', ');
+}
+
 const MAX_BLOCKS = 200;
 const MAX_CHARS = 50_000;
 
@@ -378,8 +403,10 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
     name: 'update_blocks',
     kind: 'write',
     description:
-      'Propose changing one or more blocks (not their children): new text and/or tags to add or remove, e.g. to translate several lines or drop a tag from a page. ' +
-      'Tags show at the end of block lines as #tag. Put all related edits in ONE call. The user sees before/after for each.',
+      'Propose changing one or more blocks (not their children): new text, tags to add or remove, and properties to set or remove ' +
+      '(e.g. translate several lines, drop a tag, set priority or a deadline, mark a task done with status). ' +
+      'Tags show at the end of block lines as #tag. Only existing properties can be set; list_properties shows names, types and choices. ' +
+      'Put all related edits in ONE call. The user sees before/after for each.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -394,6 +421,13 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
               content: { type: 'string', description: 'The complete new text of the block (omit to keep the text)' },
               add_tags: { type: 'array', items: { type: 'string' }, description: 'Existing tag names to add, without #' },
               remove_tags: { type: 'array', items: { type: 'string' }, description: 'Tag names to remove, without #' },
+              set_properties: {
+                type: 'object',
+                description:
+                  'Property name → new value, e.g. {"priority": "High", "deadline": "2026-11-05 14:00", "rating": 4, "done": true, "project": "[[Alpha]]", "status": "Done"}. ' +
+                  'Several-value properties take a list: the complete new list. Replaces the current value.',
+              },
+              remove_properties: { type: 'array', items: { type: 'string' }, description: 'Property names to remove from the block' },
             },
             required: ['uuid'],
             additionalProperties: false,
@@ -406,18 +440,119 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
     label: (a) => (Array.isArray(a.edits) && a.edits.length > 1 ? `proposing ${a.edits.length} edits` : 'proposing an edit'),
     run: withApproval('update_blocks', async (args, ctx, graph) => {
       const raw = args.edits;
-      if (!Array.isArray(raw) || raw.length === 0) throw new ToolInputError('"edits" must be a non-empty list of {uuid, content?, add_tags?, remove_tags?}');
+      if (!Array.isArray(raw) || raw.length === 0) throw new ToolInputError('"edits" must be a non-empty list of {uuid, content?, add_tags?, remove_tags?, set_properties?, remove_properties?}');
       if (raw.length > 50) throw new ToolInputError('at most 50 edits per call');
+      const shieldedTags = deps.policy.protectedTags();
+      const shieldedProps = deps.policy.protectedProperties();
       const tagList = (v: unknown, key: string): string[] => {
         if (v === undefined || v === null) return [];
         if (!Array.isArray(v) || v.length > 20) throw new ToolInputError(`"${key}" must be a list of tag names`);
         return v.map((t) => {
           const name = String(t).trim().replace(/^#/, '').replace(/^\[\[(.*)\]\]$/, '$1');
           if (!TAG_NAME_RE.test(name)) throw new ToolInputError(`invalid tag name in "${key}": ${String(t).slice(0, 40)}`);
+          if (shieldedTags.has(name.toLowerCase())) throw new ToolInputError(`#${name} is one of the user's privacy tags; only the user may add or remove it.`);
           return name;
         });
       };
-      type Item = { node: GNode; page: string; content: string | null; add: string[]; remove: string[] };
+      const props = await deps.reader.properties();
+      const propFor = (name: string): PropertyInfo => {
+        if (typeof name !== 'string' || name.trim() === '' || name.length > 200) throw new ToolInputError('property names must be non-empty strings');
+        const info = resolveProperty(props, name);
+        if (!info) throw new ToolInputError(`There is no property "${name}". Only existing properties can be used (list_properties shows them); the user can create new ones.`);
+        if (shieldedProps.has(info.title.toLowerCase())) throw new ToolInputError(`"${info.title}" is one of the user's privacy settings; only the user may change it.`);
+        if (!canSet(info)) {
+          const why = info.ident.startsWith('plugin.') ? 'it belongs to a plugin' : info.builtIn ? "it's one of Logseq's own" : `its type (${info.type ?? 'unknown'}) can't be set here`;
+          throw new ToolInputError(`"${info.title}" can't be changed by the AI: ${why}.`);
+        }
+        return info;
+      };
+      /** One value → EDN for --update-properties, plus how the card shows it. */
+      const convert = async (info: PropertyInfo, v: unknown, warnings: string[]): Promise<{ edn: string; shown: string }> => {
+        const bad = (want: string): ToolInputError => new ToolInputError(`"${info.title}" needs ${want} (got ${JSON.stringify(v)?.slice(0, 60)})`);
+        if (info.choices.length > 0) {
+          const s = typeof v === 'string' || typeof v === 'number' ? String(v).trim().toLowerCase() : '';
+          const c = info.choices.find((x) => x.title.toLowerCase() === s);
+          if (!c) throw bad(`one of: ${info.choices.map((x) => x.title).join(', ')}`);
+          // A fixed choice is an existing entity: pass its id (numbers pass the number itself).
+          return { edn: info.type === 'number' ? String(Number(c.title)) : String(c.id), shown: c.title };
+        }
+        switch (info.type) {
+          case 'default':
+          case 'url': {
+            if (typeof v !== 'string' && typeof v !== 'number') throw bad('text');
+            const text = String(v).replace(/\s*\n\s*/g, ' ').trim();
+            if (text === '' || text.length > 2000) throw bad('1 to 2000 characters of text');
+            if (info.type === 'url' && !/^[a-z][a-z0-9+.-]*:\/\/\S+$/i.test(text)) throw bad('a web address like https://example.com');
+            for (const w of await checkContent(text, ctx)) if (!warnings.includes(w)) warnings.push(w);
+            for (const pg of await newPagesIn(text)) if (!warnings.includes(`Will create new page: ${pg}`)) warnings.push(`Will create new page: ${pg}`);
+            return { edn: ednString(text), shown: text };
+          }
+          case 'number': {
+            const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v.trim()) : Number.NaN;
+            if (!Number.isFinite(n) || Math.abs(n) > 1e15) throw bad('a number');
+            return { edn: String(n), shown: String(n) };
+          }
+          case 'checkbox': {
+            const b = v === true || v === 'true' ? true : v === false || v === 'false' ? false : null;
+            if (b === null) throw bad('true or false');
+            return { edn: String(b), shown: String(b) };
+          }
+          case 'datetime': {
+            const ms = typeof v === 'string' ? parseDateTime(v) : null;
+            if (ms === null) throw bad('a date like 2026-11-05 or 2026-11-05 14:30');
+            return { edn: String(ms), shown: formatDateTime(ms) };
+          }
+          case 'date': {
+            const day = typeof v === 'string' ? parseDay(v.trim().replace(/^\[\[(.*)\]\]$/, '$1')) : null;
+            if (day === null) throw bad('a date like 2026-11-05');
+            const j = await deps.reader.journalByDay(day);
+            if (!j || !visibleTo(deps.policy.evaluate({ node: j, chain: [] }).visibility, ctx.locality)) {
+              throw new ToolInputError(`There's no journal page for ${formatJournalDay(day)} yet. "${info.title}" can only point at an existing journal day (the user can open that day in Logseq once).`);
+            }
+            return { edn: String(j.id), shown: formatJournalDay(day) };
+          }
+          case 'node': {
+            if (typeof v !== 'string') throw bad('a page title or ((block uuid))');
+            const text = v.trim();
+            const blockRef = /^\(\(([^)]+)\)\)$/.exec(text)?.[1] ?? (isUuid(text) ? text : null);
+            if (blockRef !== null) {
+              const { node } = await visibleBlock(blockRef, ctx);
+              return { edn: String(node.id), shown: `((${node.uuid})) ${quote(node.title, 40)}` };
+            }
+            const title = text.replace(/^#/, '').replace(/^\[\[(.*)\]\]$/, '$1').trim();
+            if (title === '') throw bad('a page title or ((block uuid))');
+            const page = await visiblePage(title, ctx);
+            return { edn: String(page.id), shown: `[[${page.title}]]` };
+          }
+          default:
+            throw bad('a value type the AI can set');
+        }
+      };
+      /** How many values of this entry link to things the AI can't see (they'd be replaced unseen). */
+      const unseenValues = async (e: PropEntry): Promise<number> => {
+        const ids = [...new Set(e.values.flatMap((v) => [...(v.target ? [v.target.id] : []), ...v.refs.map((r) => r.id)]))];
+        if (ids.length === 0) return 0;
+        const found = new Map((await deps.reader.byIds(ids)).map((t) => [t.id, t]));
+        const hiddenIds = new Set(ids.filter((id) => {
+          const t = found.get(id);
+          return !t || !visibleTo(deps.policy.evaluate({ node: t, chain: chainOf(t) }).visibility, ctx.locality);
+        }));
+        return e.values.filter((v) => (v.target && hiddenIds.has(v.target.id)) || v.refs.some((r) => hiddenIds.has(r.id))).length;
+      };
+
+      type PropSet = { info: PropertyInfo; edn: string; shown: string };
+      type Item = {
+        node: GNode;
+        page: string;
+        content: string | null;
+        add: string[];
+        remove: string[];
+        set: PropSet[];
+        unset: PropertyInfo[];
+        /** Properties to clear before setting, so a set replaces instead of adding a second value. */
+        clearFirst: string[];
+        status: { title: string; token: string } | null;
+      };
       const items: Item[] = [];
       const warnings: string[] = [];
       const seen = new Set<string>();
@@ -434,13 +569,65 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
         if (content === '') throw new ToolInputError('an edit has empty "content" (use remove_block to delete a block)');
         const add = tagList(ed.add_tags, 'add_tags');
         const remove = tagList(ed.remove_tags, 'remove_tags');
-        if (content === null && add.length === 0 && remove.length === 0) throw new ToolInputError(`edit for ${uuid} changes nothing (give content, add_tags or remove_tags)`);
+        const setRaw = ed.set_properties;
+        if (setRaw !== undefined && setRaw !== null && (typeof setRaw !== 'object' || Array.isArray(setRaw))) {
+          throw new ToolInputError('"set_properties" must be an object like {"priority": "High"}');
+        }
+        const setEntries = Object.entries((setRaw ?? {}) as Record<string, unknown>);
+        if (setEntries.length > 20) throw new ToolInputError('at most 20 properties per edit');
+        const unsetRaw = ed.remove_properties;
+        if (unsetRaw !== undefined && unsetRaw !== null && (!Array.isArray(unsetRaw) || unsetRaw.length > 20)) throw new ToolInputError('"remove_properties" must be a list of property names');
         const { node, chain } = await visibleBlock(uuid, ctx);
+
+        const set: PropSet[] = [];
+        let status: Item['status'] = null;
+        for (const [name, value] of setEntries) {
+          const info = propFor(name);
+          if (set.some((x) => x.info.ident === info.ident) || (status && info.ident === STATUS_IDENT)) throw new ToolInputError(`"${info.title}" is set twice in one edit`);
+          const list = Array.isArray(value) ? value : [value];
+          if (list.length === 0) throw new ToolInputError(`"${info.title}": to clear it, use remove_properties`);
+          if (!info.many && list.length > 1) throw new ToolInputError(`"${info.title}" takes one value`);
+          if (list.length > 50) throw new ToolInputError(`"${info.title}": at most 50 values`);
+          const conv: { edn: string; shown: string }[] = [];
+          for (const x of list) {
+            const c = await convert(info, x, warnings);
+            if (!conv.some((y) => y.edn === c.edn)) conv.push(c);
+          }
+          if (info.ident === STATUS_IDENT) {
+            // Status goes through `upsert task`, which also makes the block a task.
+            const title = (conv[0] as { shown: string }).shown;
+            status = { title, token: title.toLowerCase().replace(/[ _]+/g, '-') };
+            continue;
+          }
+          set.push({ info, edn: info.many ? `[${conv.map((c) => c.edn).join(' ')}]` : (conv[0] as { edn: string }).edn, shown: conv.map((c) => c.shown).join(', ') });
+        }
+        const unset: PropertyInfo[] = [];
+        for (const name of (unsetRaw ?? []) as unknown[]) {
+          const info = propFor(String(name));
+          if (info.ident === STATUS_IDENT) throw new ToolInputError('A task keeps a status; set a different one instead (e.g. "Canceled").');
+          if (set.some((x) => x.info.ident === info.ident)) throw new ToolInputError(`"${info.title}" is both set and removed`);
+          if (node.properties.some((p) => p.info.ident === info.ident) && !unset.includes(info)) unset.push(info);
+        }
+        const clearFirst = set.filter((x) => node.properties.some((p) => p.info.ident === x.info.ident)).map((x) => x.info.ident);
+        for (const ident of [...clearFirst, ...unset.map((u) => u.ident)]) {
+          const entry = node.properties.find((p) => p.info.ident === ident) as PropEntry;
+          const n = await unseenValues(entry);
+          if (n > 0) warnings.push(`Replaces ${n} value(s) of "${entry.info.title}" that the AI can't see.`);
+        }
+        if (content === null && add.length === 0 && remove.length === 0 && set.length === 0 && unset.length === 0 && status === null) {
+          throw new ToolInputError(`edit for ${uuid} changes nothing (give content, tags or properties; the block may not have the properties to remove)`);
+        }
         for (const name of add) {
           if (!known.has(name.toLowerCase())) known.set(name.toLowerCase(), await tagExists(graph, name));
           if (!known.get(name.toLowerCase())) throw new ToolInputError(`the tag "${name}" doesn't exist; only existing tags can be added`);
         }
         if (content !== null) {
+          // Dropping #private (or another tag your rules use) from the text would remove the tag.
+          for (const t of node.tags) {
+            if (shieldedTags.has(t.title.toLowerCase()) && mentionsTag(node.title, t.title) && !mentionsTag(content, t.title)) {
+              throw new ToolInputError(`The new text drops #${t.title}, one of the user's privacy tags; only the user may remove it. Keep it in the text.`);
+            }
+          }
           for (const w of await checkContent(content, ctx)) if (!warnings.includes(w)) warnings.push(w);
           // Links the AI couldn't see (shown to it as [hidden]) that the new text would drop.
           const refTargets = await deps.reader.byIds(node.refs.map((r) => r.id));
@@ -450,7 +637,7 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
           // A text edit marks the block as AI-written, unless it already sits under an AI-tagged block.
           if (!underAiTag([node, ...chain]) && !add.some((a) => a.toLowerCase() === aiTag.toLowerCase())) add.push(aiTag);
         }
-        items.push({ node, page: chain.at(-1)?.title ?? '?', content, add, remove });
+        items.push({ node, page: chain.at(-1)?.title ?? '?', content, add, remove, set, unset, clearFirst, status });
       }
       if (dropped > 0) warnings.push(`These blocks link to ${dropped} thing(s) the AI can't see; the new text removes ${dropped === 1 ? 'that link' : 'those links'}.`);
       const pages = [...new Set(items.map((i) => i.page))];
@@ -462,13 +649,26 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
         const before = userTags(i.node);
         const removed = new Set(i.remove.map((r) => r.toLowerCase()));
         const after = [...before.filter((t) => !removed.has(t.toLowerCase())), ...i.add.filter((a) => !before.some((b) => b.toLowerCase() === a.toLowerCase()))];
-        return { before: show(i.node.title, before), after: show(i.content ?? i.node.title, after) };
+        // Only the properties this edit touches, as "name:: value" lines under the text.
+        const touched = [...i.set.map((x) => x.info.ident), ...i.unset.map((u) => u.ident)];
+        const beforeProps = i.node.properties.filter((p) => touched.includes(p.info.ident)).map((p) => `${p.info.title}:: ${cardValue(p)}`);
+        const afterProps = i.set.map((x) => `${x.info.title}:: ${x.shown}`);
+        if (i.status) {
+          if (i.node.status) beforeProps.unshift(`status:: ${i.node.status}`);
+          afterProps.unshift(`status:: ${i.status.title}`);
+        }
+        const join = (head: string, lines: string[]): string => [head, ...lines].join('\n');
+        return { before: join(show(i.node.title, before), beforeProps), after: join(show(i.content ?? i.node.title, after), afterProps) };
       });
-      const tagOnly = items.every((i) => i.content === null);
+      const anyText = items.some((i) => i.content !== null);
+      const anyProps = items.some((i) => i.set.length > 0 || i.unset.length > 0 || i.status !== null);
+      const anyTags = items.some((i) => i.add.length > 0 || i.remove.length > 0);
+      const what = anyProps && anyTags ? 'tags and properties' : anyProps ? 'properties' : 'tags';
+      const title = anyText ? (n === 1 ? 'Edit a block' : `Edit ${n} blocks`) : n === 1 ? `Change ${what} on a block` : `Change ${what} on ${n} blocks`;
       return {
         approval: {
           tool: 'update_blocks',
-          title: tagOnly ? (n === 1 ? 'Change tags on a block' : `Change tags on ${n} blocks`) : n === 1 ? 'Edit a block' : `Edit ${n} blocks`,
+          title,
           target: n === 1 ? `${quote(items[0]?.node.title ?? '')} on page "${pages[0]}"` : pages.length === 1 ? `on page "${pages[0]}"` : `on ${pages.length} pages`,
           body: { kind: 'diffs', items: diffs },
           warnings,
@@ -479,12 +679,23 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
           let doneCount = 0;
           for (const i of items) {
             if (signal?.aborted) throw new AbortedApply(doneCount, n);
-            const options: Record<string, string> = { uuid: (i.node.uuid as string).toLowerCase() };
+            const uuid = (i.node.uuid as string).toLowerCase();
+            const options: Record<string, string> = { uuid };
             if (i.content !== null) options.content = i.content;
             if (i.add.length) options['update-tags'] = tagsEdn(i.add);
             if (i.remove.length) options['remove-tags'] = tagsEdn(i.remove);
-            const r = await run({ command: ['upsert', 'block'], graph, options });
-            if (!r.ok) throw new Error(`${doneCount} of ${n} edits applied, then: ${cliMessage(r)}`);
+            // The CLI removes before it sets, so clearing first makes a set replace the old value.
+            const clear = [...new Set([...i.clearFirst, ...i.unset.map((u) => u.ident)])];
+            if (clear.length) options['remove-properties'] = `[${clear.map(ednKeyword).join(' ')}]`;
+            if (i.set.length) options['update-properties'] = `{${i.set.map((x) => `${ednKeyword(x.info.ident)} ${x.edn}`).join(' ')}}`;
+            if (Object.keys(options).length > 1) {
+              const r = await run({ command: ['upsert', 'block'], graph, options });
+              if (!r.ok) throw new Error(`${doneCount} of ${n} edits applied, then: ${cliMessage(r)}`);
+            }
+            if (i.status) {
+              const r = await run({ command: ['upsert', 'task'], graph, options: { uuid, status: i.status.token } });
+              if (!r.ok) throw new Error(`${doneCount} of ${n} edits applied, then (status): ${cliMessage(r)}`);
+            }
             doneCount += 1;
             progress?.(doneCount, n);
           }
@@ -570,7 +781,8 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
       // A new page must not land somewhere the user's rules hide (e.g. a denied namespace).
       const synthetic: GNode = {
         id: -1, uuid: null, title, name: title.toLowerCase(), ident: null, pageId: null, parentId: null, order: '',
-        journalDay: null, status: null, tags: [], refs: [], props: new Map(), createdFromProperty: null, parent: null,
+        journalDay: null, status: null, tags: [], refs: [], props: new Map(), properties: [], createdAt: null, updatedAt: null,
+        createdFromProperty: null, parent: null,
       };
       if (!visibleTo(deps.policy.evaluate({ node: synthetic, chain: [] }).visibility, ctx.locality)) throw cannot;
       return {

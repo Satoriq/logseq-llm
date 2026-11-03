@@ -28,6 +28,7 @@
 | 2026-11-04 | autoApply mode **`own`** (AI Sandbox): additions, plus edits and deletes of blocks the AI created **in the same chat**. Tracked per chat as UUIDs in the chat's metadata, and a deletion qualifies only if the whole subtree is the AI's own. Anything with warnings, or touching your blocks, still gets a card. Edits are batched in one tool, **`update_blocks`** (up to 50, one card). Auto-applied changes show as one compact line with "Show"; card status lines no longer list block ids (only the model gets those). |
 | 2026-11-04 | **Apply all (per answer):** a card button that applies this change and auto-applies every further change in the same turn, your blocks included; it's forgotten when the turn ends. Edits and deletes applied without a click wait **2 s** with **Abort**, and batches show progress and can be aborted between items. Cards fold to one line 1 s after they finish; two or more in one answer form a group, "N changes · ✓ · ✗", which folds the same way. Panel and bridge versions are 0.4.0. |
 | 2026-11-04 | AI tag renamed to **`#ai`** (setting `aiTag`) and put **only on the top block** of what the AI writes. Inserts, edits and tasks under an `#ai`-tagged block aren't tagged again. The bridge creates the tag in writable graphs. Reads now show user tags at the end of each line (tags whose page is hidden are left out), and `update_blocks` can `add_tags` / `remove_tags`. **Note for step 7 (D worker):** page names are case-insensitive, so the tag `ai` and a mention page `[[AI]]` would be the same page. D needs a different mention page, and it must ignore blocks it wrote itself. |
+| 2026-11-04 | **Properties:** the bridge reads every property type (text, number, checkbox, date, date-time, url, node links, several-value), Logseq's public built-ins (priority, deadline, scheduled, status, description, alias…) and created/updated times. Rules see the same raw values as before. **Context cost:** reads show only property *names*, "(props: priority, deadline)"; values come with `properties: true`, from `find_by_property` (value or range) and `list_properties` (types, choices). Setting `readProperties` (`names` / `values` / `off`) sets the default. Not a skill: the `claude -p` run has no skills, and the other providers only see tool definitions. Property values that link to hidden pages show as `[hidden]` and can't be found by search. `update_blocks` gains `set_properties` / `remove_properties` (only existing properties; yours, plus status, priority, deadline, scheduled and description). A set replaces the old value, and status goes through `upsert task`. **Privacy tags and properties are the user's:** the AI can't add or remove `#private`, `ai-access` or anything a rule names, and a text edit can't drop `#private`. Each turn starts with today's date. Bridge 0.6.0. |
 | open | Q5 voice edits, Q6 trigger, Q7 D approval (defaults in §3). |
 
 An AI chat panel inside Logseq DB (desktop, macOS) for personal use. It has a
@@ -448,9 +449,10 @@ shell, file tools, web tools or raw CLI access.
   - `get_page`, `get_block` (with or without children)
   - `list_tasks`, `list_pages` (by tag or journal range)
   - `get_backlinks`
+  - `list_properties`, `find_by_property` (property values only on request: `properties: true`)
 - **Write** (all preview then approve):
   - `insert_blocks` (a block tree at a target and position)
-  - `update_blocks` (one or more blocks: content, tags)
+  - `update_blocks` (one or more blocks: content, tags, properties, task status)
   - `create_task`, `create_page`
   - `remove_block`
 - **Editor** (run by the plugin):

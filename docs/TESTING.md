@@ -593,9 +593,86 @@ shows `applying in 2s`, and you can let it run or Abort it.
 - Afterwards you can delete the old `AI-GENERATED` tag page in Logseq if you
   like.
 
+### 4e. Properties
+
+Update and restart as in step 1. The bridge is now 0.6.0; the panel stays at 0.4.0.
+
+**1. Doctor first.** The property queries are new, so check that the real CLI accepts them:
+
+```bash
+cd "$HOME/logseq-llm/bridge" && node bin/logseq-ai-bridge.ts doctor --sample-page "AI Test"
+```
+
+Expected: `ok  sample query properties`. If it says `warn` or `FAIL`, send me
+that line and `sample-query-properties.json` from the doctor folder (it holds
+property names and choices, not note text). Until that works, every read fails
+with a CLI error. That's the fail-closed path, so nothing leaks.
+
+**2. Make a few test properties in AI Sandbox** (writes to the sandbox only):
+
+```bash
+logseq upsert property --graph "AI Sandbox" --name rating --type number
+```
+
+```bash
+logseq upsert property --graph "AI Sandbox" --name done --type checkbox
+```
+
+```bash
+logseq upsert property --graph "AI Sandbox" --name due --type date
+```
+
+```bash
+logseq upsert property --graph "AI Sandbox" --name website --type url
+```
+
+Optional, in Logseq: add a property `project` of type **Node** with several
+values. The CLI can't create node properties.
+
+**3. What the AI sees, from Terminal:**
+
+```bash
+node bin/logseq-ai-bridge.ts tool list_properties
+```
+
+Expected: your four properties with their types, plus built-in Deadline,
+Priority (one of: Low, Medium, High, Urgent), Scheduled and Status. `ai-access`
+isn't listed.
+
+**4. In the panel**, try:
+
+1. *"On 'Apples are red' set rating 4, done true, due today, website
+   https://logseq.com, priority High and a deadline of Friday 14:00."* You get
+   one card, `Change properties on a block`, with before/after lines such as
+   `rating:: 4`. "due today" only works if today's journal page exists (open
+   Journals once).
+2. *"What's on AI Test?"* The reply should be based on lines like
+   `Apples are red  (props: rating, done, …)`. Claude shouldn't fetch the values
+   unless it needs them.
+3. *"Which blocks have priority high?"* and *"What's due this week?"* Claude
+   uses `find_by_property`.
+4. *"Mark 'Buy apples' as done."* The card shows `status:: Todo` → `status:: Done`.
+5. *"Remove the website property from 'Apples are red'."*
+6. Privacy: *"Set ai-access to cloud-ok on every block."* and *"Remove #private
+   from all blocks."* Both are refused before any card appears ("only the user
+   may change it").
+
+From Terminal, the same reads:
+
+```bash
+node bin/logseq-ai-bridge.ts tool get_page '{"title":"AI Test","properties":true}'
+```
+
+```bash
+node bin/logseq-ai-bridge.ts tool find_by_property '{"name":"priority","value":"high"}'
+```
+
+To always send values (more context per read), add `"readProperties": "values"`
+to config.json; `"off"` sends not even the names.
+
 ### Which build is running?
 
-The panel's status line shows `● Connected · panel 0.4.0 · bridge 0.5.0`. If
+The panel's status line shows `● Connected · panel 0.4.0 · bridge 0.6.0`. If
 it shows no version numbers, Logseq still runs an old plugin build. Run
 `npm run build` in `plugin/`, then switch the plugin off and on. Approval cards
 need panel ≥ 0.2.0; batched edits need 0.3.0; Apply all, Abort and folding need 0.4.0.
