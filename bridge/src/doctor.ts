@@ -118,6 +118,39 @@ export async function runDoctor(opts: DoctorOptions): Promise<boolean> {
       add({ name: 'configured graph', ok: false, warnOnly: true, detail: 'graph is null in config.json, so tools use the CLI\'s current graph. Set it to your sandbox graph for testing.' });
     }
 
+    // Which process serves each graph. If the app doesn't have a graph open, the CLI starts
+    // its own background worker for it ("owner-source: cli") and leaves it running.
+    const servers = await cli.runDiagnostic(['server', 'list', '--output=json']);
+    const list = ((servers.json as { data?: { servers?: unknown } } | null)?.data?.servers ?? null) as
+      | { graph?: unknown; 'owner-source'?: unknown }[]
+      | null;
+    if (Array.isArray(list)) {
+      const cliOwned = list.filter((s) => s['owner-source'] === 'cli').map((s) => String(s.graph));
+      const mine = list.find((s) => s.graph === config.graph);
+      if (config.graph !== null) {
+        add({
+          name: 'graph served by the app',
+          ok: mine !== undefined && mine['owner-source'] === 'electron',
+          warnOnly: true,
+          detail:
+            mine === undefined
+              ? `no worker for "${config.graph}" yet (open it in Logseq)`
+              : `"${config.graph}" is served by ${String(mine['owner-source'])}${mine['owner-source'] === 'electron' ? '' : ' (open it in Logseq so edits in the app and the CLI share one worker)'}`,
+        });
+      }
+      add({
+        name: 'background CLI workers',
+        ok: cliOwned.length === 0,
+        warnOnly: true,
+        detail:
+          cliOwned.length === 0
+            ? 'none'
+            : `running for: ${cliOwned.map((g) => JSON.stringify(g)).join(', ')} (started by the CLI because the app did not have that graph open; stop with: logseq server stop --graph="<name>")`,
+      });
+    } else {
+      add({ name: 'server list', ok: false, warnOnly: true, detail: 'could not read `logseq server list --output=json`' });
+    }
+
     const helpParts: string[] = [];
     const top = await cli.runDiagnostic(['--help']);
     helpParts.push(`=== logseq --help\n${top.stdout}${top.stderr}`);

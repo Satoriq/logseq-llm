@@ -66,7 +66,7 @@ const WRITE_COMMANDS: Record<string, readonly string[]> = {
 };
 
 /** Read-only commands `doctor` may run. Never graph/server/sync/login/agent/skill install. */
-const DOCTOR_COMMANDS = new Set(['--version', 'graph list', 'server list']);
+const DOCTOR_COMMANDS = new Set(['--version', 'graph list', 'server list', 'server list --output=json']);
 
 const OPTION_KEY_RE = /^[a-z][a-z0-9-]{0,40}$/;
 const MAX_VALUE_LENGTH = 200_000;

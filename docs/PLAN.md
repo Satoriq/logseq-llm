@@ -690,6 +690,16 @@ Mirror (it stays off).
   - its JSON output shape
   - whether `query` accepts inputs
   - the right way to create Comment blocks
+- **The CLI's background workers** (seen 2026-11-03): if the app doesn't have a
+  graph open, any `logseq … --graph=X` command starts a CLI-owned db-worker for
+  X and leaves it running (`logseq server list` shows `owner-source: cli`).
+  **Rule for 1b:** before reading, the bridge checks that the configured graph
+  is served by the app (`electron`). If it isn't, the bridge refuses the call
+  instead of starting a background worker, and `doctor` warns about any leftover
+  CLI workers.
+- **CLI JSON envelope** (seen): `{"status":"ok","data":{…}}`, for example
+  `search block` → `{"data":{"items":[…]}}`. Errors look like
+  `{"status":"error","error":{"code":"page-not-found","message":"…"}}`.
 - **`DB.onChanged` payloads:** what the DB version actually sends.
 - **Flags in 2.1.316:** whether that version has `--restricted`,
   `--permission-prompts` and `--disable-slash-commands` (all exist in 2.1.317).

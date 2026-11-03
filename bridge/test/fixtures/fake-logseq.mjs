@@ -9,6 +9,13 @@ if (argv[0] === '--version') {
   process.stdout.write('fake-logseq 0.0.0\n');
   process.exit(0);
 }
+if (argv[0] === 'server' && argv[1] === 'list') {
+  process.stdout.write(JSON.stringify({ status: 'ok', data: { servers: [
+    { graph: 'Sandbox', 'owner-source': 'electron', owned: false },
+    { graph: 'Main Graph', 'owner-source': 'cli', owned: true },
+  ] } }) + '\n');
+  process.exit(0);
+}
 if (argv.includes('--page=__fail__')) {
   process.stderr.write('simulated failure\n');
   process.exit(3);
