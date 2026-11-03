@@ -49,6 +49,7 @@ export function buildGraph(config: BridgeConfig, paths?: DataPaths, own?: OwnBlo
         runDir: paths.run,
         audit: new AuditLog(paths.audit),
         autoApply: config.graph !== null ? (config.autoApply[config.graph] ?? 'none') : 'none',
+        aiTag: config.aiTag,
         ...(own ? { own } : {}),
       }),
     );

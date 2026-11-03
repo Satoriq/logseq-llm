@@ -6,7 +6,7 @@ import type { AutoApplyMode } from '../config.ts';
 import type { AuditLog } from '../audit.ts';
 import { chainOf, isPage, resultItems } from '../graph/entity.ts';
 import type { GNode } from '../graph/entity.ts';
-import { GraphError, isUuid } from '../graph/reader.ts';
+import { ednString, GraphError, isUuid } from '../graph/reader.ts';
 import type { GraphReader } from '../graph/reader.ts';
 import { ACCESS_PROPERTY, visibleTo } from '../policy/policy.ts';
 import type { Policy } from '../policy/policy.ts';
@@ -20,10 +20,17 @@ import type { ToolContext, ToolDef, ToolOutput } from './registry.ts';
  *   check (target visible to this model, graph in writeGraphs, content rules)
  *   → preview (CLI --dry-run where the CLI supports it, otherwise built from a read)
  *   → approval card → Apply runs exactly the previewed command → result back to the model.
- * Everything the AI writes is tagged #AI-GENERATED.
+ * The top block of whatever the AI writes is tagged #ai (config "aiTag"); blocks under an
+ * already-tagged block are not tagged again, so a poem keeps one tag on its title.
  */
 
-export const AI_TAG = 'AI-GENERATED';
+export const DEFAULT_AI_TAG = 'ai';
+const TAG_NAME_RE = /^[^\n"\\[\]]{1,80}$/;
+
+/** EDN vector of tag names for --update-tags / --remove-tags. */
+function tagsEdn(names: readonly string[]): string {
+  return `[${names.map(ednString).join(' ')}]`;
+}
 const MAX_BLOCKS = 200;
 const MAX_CHARS = 50_000;
 
@@ -41,6 +48,8 @@ export type WriteToolDeps = {
   autoApply?: AutoApplyMode;
   /** What the AI created in each chat (for autoApply "own"). */
   own?: OwnBlocks;
+  /** Tag for AI-written blocks (default "ai"). */
+  aiTag?: string;
 };
 
 export type OwnBlocks = {
@@ -134,16 +143,29 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
     return deps.graph;
   };
 
+  const aiTag = deps.aiTag ?? DEFAULT_AI_TAG;
+  const tagExists = async (graph: string, name: string): Promise<boolean> => {
+    const r = await deps.run({ command: ['search', 'tag'], graph, options: { content: name } });
+    if (!r.ok) throw new GraphError('cli', cliMessage(r));
+    return resultItems(r.json).some((i) => String(i['block/title'] ?? i.title ?? '').toLowerCase() === name.toLowerCase());
+  };
+
+  /** The AI tag must exist before it's used; in a writable graph the bridge creates it once. */
   const ensureTag = async (graph: string): Promise<void> => {
     if (tagChecked) return;
-    const r = await deps.run({ command: ['search', 'tag'], graph, options: { content: AI_TAG } });
-    if (!r.ok) throw new GraphError('cli', cliMessage(r));
-    const found = resultItems(r.json).some((i) => String(i['block/title'] ?? i.title ?? '').toLowerCase() === AI_TAG.toLowerCase());
-    if (!found) {
-      throw new ToolInputError(`The tag "${AI_TAG}" doesn't exist in this graph yet. The user can create it once with: logseq upsert tag --graph="${graph}" --name=${AI_TAG}`);
+    if (!(await tagExists(graph, aiTag))) {
+      const r = await deps.run({ command: ['upsert', 'tag'], graph, allowWrite: true, options: { name: aiTag } });
+      if (!r.ok) {
+        throw new ToolInputError(`The tag "${aiTag}" doesn't exist and couldn't be created (${cliMessage(r)}). The user can create it with: logseq upsert tag --graph="${graph}" --name=${aiTag}`);
+      }
+      void deps.audit?.record({ kind: 'write', chatId: 'bridge', tool: 'create_ai_tag', outcome: 'applied' });
     }
     tagChecked = true;
   };
+
+  /** True if the block, a parent, or the page already carries the AI tag. */
+  const underAiTag = (nodes: readonly GNode[]): boolean =>
+    nodes.some((n) => n.tags.some((t) => t.title.toLowerCase() === aiTag.toLowerCase()));
 
   const visibleBlock = async (uuid: string, ctx: ToolContext): Promise<{ node: GNode; chain: GNode[] }> => {
     if (!isUuid(uuid)) throw new ToolInputError('"uuid" must be a block uuid');
@@ -298,9 +320,13 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
       let target: string;
       let title: string;
       let targetUuids: string[];
-      const options: Record<string, string | boolean> = { pos: position === 'after' ? 'sibling' : position, 'update-tags': `["${AI_TAG}"]` };
+      const options: Record<string, string | boolean> = { pos: position === 'after' ? 'sibling' : position };
+      const tag = (): void => {
+        options['update-tags'] = tagsEdn([aiTag]);
+      };
       if (page !== undefined) {
         const p = await visiblePage(page, ctx);
+        if (!underAiTag([p])) tag();
         options['target-page'] = p.title;
         target = `page "${p.title}", ${position === 'first-child' ? 'at the top' : 'at the end'}`;
         title = `Add ${blocks} block${blocks === 1 ? '' : 's'} to "${p.title}"`;
@@ -308,6 +334,8 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
       } else {
         const { node, chain } = await visibleBlock(parent as string, ctx);
         options['target-uuid'] = (node.uuid as string).toLowerCase();
+        // New children of an AI-tagged block don't need their own tag; siblings check the parent chain.
+        if (!underAiTag(position === 'after' ? chain : [node, ...chain])) tag();
         const where = position === 'after' ? 'after' : position === 'first-child' ? 'as first children of' : 'under';
         target = `${where} ${quote(node.title)} on page "${chain.at(-1)?.title ?? '?'}"`;
         title = `Add ${blocks} block${blocks === 1 ? '' : 's'} ${where === 'under' ? 'under a block' : where === 'after' ? 'after a block' : 'into a block'}`;
@@ -350,8 +378,8 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
     name: 'update_blocks',
     kind: 'write',
     description:
-      "Propose replacing the text of one or more blocks (not their children), e.g. to translate or fix several lines at once. " +
-      'Put all related edits in ONE call. The user sees before/after for each and must approve them.',
+      'Propose changing one or more blocks (not their children): new text and/or tags to add or remove, e.g. to translate several lines or drop a tag from a page. ' +
+      'Tags show at the end of block lines as #tag. Put all related edits in ONE call. The user sees before/after for each.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -361,8 +389,13 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
           maxItems: 50,
           items: {
             type: 'object',
-            properties: { uuid: { type: 'string' }, content: { type: 'string', description: 'The complete new text of the block' } },
-            required: ['uuid', 'content'],
+            properties: {
+              uuid: { type: 'string' },
+              content: { type: 'string', description: 'The complete new text of the block (omit to keep the text)' },
+              add_tags: { type: 'array', items: { type: 'string' }, description: 'Existing tag names to add, without #' },
+              remove_tags: { type: 'array', items: { type: 'string' }, description: 'Tag names to remove, without #' },
+            },
+            required: ['uuid'],
             additionalProperties: false,
           },
         },
@@ -373,39 +406,71 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
     label: (a) => (Array.isArray(a.edits) && a.edits.length > 1 ? `proposing ${a.edits.length} edits` : 'proposing an edit'),
     run: withApproval('update_blocks', async (args, ctx, graph) => {
       const raw = args.edits;
-      if (!Array.isArray(raw) || raw.length === 0) throw new ToolInputError('"edits" must be a non-empty list of {uuid, content}');
+      if (!Array.isArray(raw) || raw.length === 0) throw new ToolInputError('"edits" must be a non-empty list of {uuid, content?, add_tags?, remove_tags?}');
       if (raw.length > 50) throw new ToolInputError('at most 50 edits per call');
-      const items: { node: GNode; page: string; content: string }[] = [];
+      const tagList = (v: unknown, key: string): string[] => {
+        if (v === undefined || v === null) return [];
+        if (!Array.isArray(v) || v.length > 20) throw new ToolInputError(`"${key}" must be a list of tag names`);
+        return v.map((t) => {
+          const name = String(t).trim().replace(/^#/, '').replace(/^\[\[(.*)\]\]$/, '$1');
+          if (!TAG_NAME_RE.test(name)) throw new ToolInputError(`invalid tag name in "${key}": ${String(t).slice(0, 40)}`);
+          return name;
+        });
+      };
+      type Item = { node: GNode; page: string; content: string | null; add: string[]; remove: string[] };
+      const items: Item[] = [];
       const warnings: string[] = [];
       const seen = new Set<string>();
+      const known = new Map<string, boolean>();
       let dropped = 0;
       for (const e of raw as unknown[]) {
-        if (e === null || typeof e !== 'object' || Array.isArray(e)) throw new ToolInputError('each edit must be {uuid, content}');
+        if (e === null || typeof e !== 'object' || Array.isArray(e)) throw new ToolInputError('each edit must be an object with "uuid"');
         const ed = e as Record<string, unknown>;
         const uuid = (argString(ed, 'uuid', { required: true, max: 64 }) as string).toLowerCase();
         if (seen.has(uuid)) throw new ToolInputError(`block ${uuid} is edited twice`);
         seen.add(uuid);
-        const content = (argString(ed, 'content', { required: true, max: 20_000 }) as string).replace(/\r\n?/g, '\n').trim();
+        const rawContent = argString(ed, 'content', { required: false, max: 20_000 });
+        const content = rawContent === undefined ? null : rawContent.replace(/\r\n?/g, '\n').trim();
         if (content === '') throw new ToolInputError('an edit has empty "content" (use remove_block to delete a block)');
+        const add = tagList(ed.add_tags, 'add_tags');
+        const remove = tagList(ed.remove_tags, 'remove_tags');
+        if (content === null && add.length === 0 && remove.length === 0) throw new ToolInputError(`edit for ${uuid} changes nothing (give content, add_tags or remove_tags)`);
         const { node, chain } = await visibleBlock(uuid, ctx);
-        for (const w of await checkContent(content, ctx)) if (!warnings.includes(w)) warnings.push(w);
-        // Links the AI couldn't see (shown to it as [hidden]) that the new text would drop.
-        const refTargets = await deps.reader.byIds(node.refs.map((r) => r.id));
-        const unseen = refTargets.filter((t) => !visibleTo(deps.policy.evaluate({ node: t, chain: chainOf(t) }).visibility, ctx.locality));
-        dropped += unseen.filter((t) => !content.includes(t.title) && !(t.uuid && content.includes(t.uuid))).length;
-        for (const p of await newPagesIn(content)) if (!warnings.includes(`Will create new page: ${p}`)) warnings.push(`Will create new page: ${p}`);
-        items.push({ node, page: chain.at(-1)?.title ?? '?', content });
+        for (const name of add) {
+          if (!known.has(name.toLowerCase())) known.set(name.toLowerCase(), await tagExists(graph, name));
+          if (!known.get(name.toLowerCase())) throw new ToolInputError(`the tag "${name}" doesn't exist; only existing tags can be added`);
+        }
+        if (content !== null) {
+          for (const w of await checkContent(content, ctx)) if (!warnings.includes(w)) warnings.push(w);
+          // Links the AI couldn't see (shown to it as [hidden]) that the new text would drop.
+          const refTargets = await deps.reader.byIds(node.refs.map((r) => r.id));
+          const unseen = refTargets.filter((t) => !visibleTo(deps.policy.evaluate({ node: t, chain: chainOf(t) }).visibility, ctx.locality));
+          dropped += unseen.filter((t) => !content.includes(t.title) && !(t.uuid && content.includes(t.uuid))).length;
+          for (const p of await newPagesIn(content)) if (!warnings.includes(`Will create new page: ${p}`)) warnings.push(`Will create new page: ${p}`);
+          // A text edit marks the block as AI-written, unless it already sits under an AI-tagged block.
+          if (!underAiTag([node, ...chain]) && !add.some((a) => a.toLowerCase() === aiTag.toLowerCase())) add.push(aiTag);
+        }
+        items.push({ node, page: chain.at(-1)?.title ?? '?', content, add, remove });
       }
       if (dropped > 0) warnings.push(`These blocks link to ${dropped} thing(s) the AI can't see; the new text removes ${dropped === 1 ? 'that link' : 'those links'}.`);
       const pages = [...new Set(items.map((i) => i.page))];
       const n = items.length;
       const uuids = items.map((i) => (i.node.uuid as string).toLowerCase());
+      const show = (text: string, tags: string[]): string => text + (tags.length ? ` ${tags.map((t) => (/\s/.test(t) ? `#[[${t}]]` : `#${t}`)).join(' ')}` : '');
+      const userTags = (node: GNode): string[] => node.tags.filter((t) => !t.ident?.startsWith('logseq.class/')).map((t) => t.title);
+      const diffs = items.map((i) => {
+        const before = userTags(i.node);
+        const removed = new Set(i.remove.map((r) => r.toLowerCase()));
+        const after = [...before.filter((t) => !removed.has(t.toLowerCase())), ...i.add.filter((a) => !before.some((b) => b.toLowerCase() === a.toLowerCase()))];
+        return { before: show(i.node.title, before), after: show(i.content ?? i.node.title, after) };
+      });
+      const tagOnly = items.every((i) => i.content === null);
       return {
         approval: {
           tool: 'update_blocks',
-          title: n === 1 ? 'Edit a block' : `Edit ${n} blocks`,
+          title: tagOnly ? (n === 1 ? 'Change tags on a block' : `Change tags on ${n} blocks`) : n === 1 ? 'Edit a block' : `Edit ${n} blocks`,
           target: n === 1 ? `${quote(items[0]?.node.title ?? '')} on page "${pages[0]}"` : pages.length === 1 ? `on page "${pages[0]}"` : `on ${pages.length} pages`,
-          body: { kind: 'diffs', items: items.map((i) => ({ before: i.node.title, after: i.content })) },
+          body: { kind: 'diffs', items: diffs },
           warnings,
         },
         targetUuids: uuids,
@@ -414,7 +479,11 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
           let doneCount = 0;
           for (const i of items) {
             if (signal?.aborted) throw new AbortedApply(doneCount, n);
-            const r = await run({ command: ['upsert', 'block'], graph, options: { uuid: (i.node.uuid as string).toLowerCase(), content: i.content, 'update-tags': `["${AI_TAG}"]` } });
+            const options: Record<string, string> = { uuid: (i.node.uuid as string).toLowerCase() };
+            if (i.content !== null) options.content = i.content;
+            if (i.add.length) options['update-tags'] = tagsEdn(i.add);
+            if (i.remove.length) options['remove-tags'] = tagsEdn(i.remove);
+            const r = await run({ command: ['upsert', 'block'], graph, options });
             if (!r.ok) throw new Error(`${doneCount} of ${n} edits applied, then: ${cliMessage(r)}`);
             doneCount += 1;
             progress?.(doneCount, n);
@@ -453,16 +522,19 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
       const options: Record<string, string> = { content, status };
       let target: string;
       let targetUuids: string[];
+      let needsTag: boolean;
       if (page !== undefined) {
         const p = await visiblePage(page, ctx);
         options['target-page'] = p.title;
         target = `page "${p.title}", at the end`;
         targetUuids = p.uuid ? [p.uuid] : [];
+        needsTag = !underAiTag([p]);
       } else {
         const { node, chain } = await visibleBlock(parent as string, ctx);
         options['target-uuid'] = (node.uuid as string).toLowerCase();
         target = `under ${quote(node.title)} on page "${chain.at(-1)?.title ?? '?'}"`;
         targetUuids = node.uuid ? [node.uuid] : [];
+        needsTag = !underAiTag([node, ...chain]);
       }
       return {
         approval: { tool: 'create_task', title: 'Add a task', target, body: { kind: 'text', text: `[${status}] ${content}` }, warnings },
@@ -472,8 +544,8 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
           if (!r.ok) throw new Error(cliMessage(r));
           const ids = resultIds(r.json);
           // `upsert task` has no --update-tags, so tag the new task in a second, equally approved step.
-          for (const id of ids) {
-            const t = await run({ command: ['upsert', 'block'], graph, options: { id: String(id), 'update-tags': `["${AI_TAG}"]` } });
+          for (const id of needsTag ? ids : []) {
+            const t = await run({ command: ['upsert', 'block'], graph, options: { id: String(id), 'update-tags': tagsEdn([aiTag]) } });
             if (!t.ok) throw new Error(`task created, but tagging it failed: ${cliMessage(t)}`);
           }
           const uuids = await uuidsOf(ids);
@@ -505,7 +577,7 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
         approval: { tool: 'create_page', title: 'Create a page', target: 'new page', body: { kind: 'text', text: title }, warnings: [] },
         targetUuids: [],
         apply: async () => {
-          const r = await run({ command: ['upsert', 'page'], graph, options: { page: title, 'update-tags': `["${AI_TAG}"]` } });
+          const r = await run({ command: ['upsert', 'page'], graph, options: { page: title, 'update-tags': tagsEdn([aiTag]) } });
           if (!r.ok) throw new Error(cliMessage(r));
           const uuids = await uuidsOf(resultIds(r.json));
           return { summary: `created page "${title}"`, short: `created page "${title}"`, targetUuids: uuids, created: uuids };

@@ -57,12 +57,13 @@ test('outline normalization', () => {
   assert.throws(() => normalizeOutline('  - child first\n- a'), /top-level/);
 });
 
-test('writes are off unless the graph is in writeGraphs, and need the AI-GENERATED tag', async () => {
+test('writes are off unless the graph is in writeGraphs; the #ai tag is created when missing', async () => {
   const off = await setup({ writeGraphs: [] });
   await assert.rejects(off.tool('insert_blocks').run({ page: 'AI Test', markdown: '- x' }, ctx('apply').c), /writeGraphs/);
+  assert.equal(off.fake.writes.length, 0);
   const noTag = await setup({ aiTag: false });
-  await assert.rejects(noTag.tool('insert_blocks').run({ page: 'AI Test', markdown: '- x' }, ctx('apply').c), /upsert tag --graph="AI Sandbox" --name=AI-GENERATED/);
-  assert.equal(off.fake.writes.length + noTag.fake.writes.length, 0);
+  assert.match((await noTag.tool('insert_blocks').run({ page: 'AI Test', markdown: '- x' }, ctx('apply').c)).text, /^Applied/);
+  assert.ok(noTag.fake.calls.some((c) => c.command.join(' ') === 'upsert tag' && c.options?.name === 'ai'), 'tag created once');
   // Without an approval channel (e.g. called outside the panel) nothing runs.
   const s = await setup();
   await assert.rejects(s.tool('insert_blocks').run({ page: 'AI Test', markdown: '- x' }, { locality: 'local' }), /need the Logseq AI panel/);
@@ -82,7 +83,7 @@ test('insert_blocks: dry run → card → Apply runs exactly the previewed comma
   assert.ok(dry && real);
   const { ['dry-run']: _d, ...dryRest } = dry.options ?? {};
   assert.deepEqual(real.options, dryRest, 'apply = the previewed command minus --dry-run');
-  assert.equal(real.options?.['update-tags'], '["AI-GENERATED"]');
+  assert.equal(real.options?.['update-tags'], '["ai"]');
   assert.match(out.text, /^Applied: added 2 block\(s\): \[id:/);
   assert.equal(outcomes[0], 'applied:added 2 blocks', 'the card gets a short summary, no ids');
   const created = [...fake.byId.values()].filter((e) => e.title.startsWith('Summary of'));
@@ -122,7 +123,7 @@ test('update_blocks: before/after card and a warning when hidden links would be 
   const { tool } = await setup({ deny: ['page:AI Test 2'] });
   const { c, cards } = ctx('apply');
   const out = await tool('update_blocks').run({ edits: [{ uuid: '05c4b96b-5012-4826-a902-693efb290e0d', content: 'See the other page' }] }, c);
-  assert.deepEqual(cards[0]?.body, { kind: 'diffs', items: [{ before: 'See [[AI Test 2]]', after: 'See the other page' }] });
+  assert.deepEqual(cards[0]?.body, { kind: 'diffs', items: [{ before: 'See [[AI Test 2]]', after: 'See the other page #ai' }] }, 'the card shows the tag the edit adds');
   assert.ok(cards[0]?.warnings.some((w) => w.includes("link to 1 thing(s) the AI can't see")));
   assert.match(out.text, /^Applied: edited 1 block/);
 });
@@ -384,4 +385,42 @@ test('Abort during a batch stops the remaining edits and tells the model how man
   assert.match(out.text, /aborted this change: 1 of 3 edits had been applied/);
   assert.equal(fake.writes.length, 1);
   assert.deepEqual(progress, ['1/3', 'aborted:1 of 3 applied']);
+});
+
+test('tags: visible in reads; removable with update_blocks; #ai only on the top block', async () => {
+  const { fake, tool } = await setup();
+  const a558 = [...fake.byId.values()].find((e) => e.uuid === 'a558ac4e-ae05-43f3-af22-f167c5f56975');
+  const c54f = [...fake.byId.values()].find((e) => e.uuid === '54f76cdd-307a-436e-9716-f129841c97e6');
+  assert.ok(a558 && c54f);
+  a558.tags = [301]; // "Apples are red" carries #AI-GENERATED from an older version
+  c54f.tags = [301];
+  const reader = new GraphReader({ run: fake.run, graph: 'AI Sandbox' });
+  const read = readTools({ reader, policy: new Policy({ deny: [], allow: [] }), ensureGraph: async () => {} }).find((t) => t.name === 'get_page') as ToolDef;
+  const page = await read.run({ title: 'AI Test' }, { locality: 'cloud' });
+  assert.match(page.text, /- Apples are red #AI-GENERATED {2}\[id:/, 'models can see tags now');
+
+  // Remove the old tag from both lines in one change.
+  const { c, cards } = ctx('apply');
+  const out = await tool('update_blocks').run({ edits: [a558.uuid, c54f.uuid].map((uuid) => ({ uuid, remove_tags: ['#AI-GENERATED'] })) }, c);
+  assert.equal(cards[0]?.title, 'Change tags on 2 blocks');
+  assert.deepEqual((cards[0]?.body as { items: unknown[] }).items[0], { before: 'Apples are red #AI-GENERATED', after: 'Apples are red' });
+  assert.match(out.text, /^Applied/);
+  assert.deepEqual([a558.tags, c54f.tags], [[], []]);
+  const tagOnly = fake.writes.at(-1);
+  assert.equal(tagOnly?.options?.content, undefined, 'a tag-only edit leaves the text alone');
+  assert.equal(tagOnly?.options?.['remove-tags'], '["AI-GENERATED"]');
+
+  // Only the top block gets #ai: a text edit under an #ai-tagged parent adds no tag.
+  a558.tags = [300];
+  await tool('update_blocks').run({ edits: [{ uuid: c54f.uuid, content: 'A child, translated' }] }, ctx('apply').c);
+  assert.equal(fake.writes.at(-1)?.options?.['update-tags'], undefined);
+  // A text edit of your own top-level block marks it.
+  await tool('update_blocks').run({ edits: [{ uuid: '05c4b96b-5012-4826-a902-693efb290e0d', content: 'See [[AI Test 2]] again' }] }, ctx('apply').c);
+  assert.equal(fake.writes.at(-1)?.options?.['update-tags'], '["ai"]');
+  // New children of an #ai block aren't tagged either.
+  await tool('insert_blocks').run({ parent_uuid: a558.uuid, markdown: '- more' }, ctx('apply').c);
+  assert.equal(fake.writes.at(-1)?.options?.['update-tags'], undefined);
+  // Unknown tags can't be added.
+  await assert.rejects(tool('update_blocks').run({ edits: [{ uuid: a558.uuid, add_tags: ['nope'] }] }, ctx('apply').c), /doesn't exist/);
+  await assert.rejects(tool('update_blocks').run({ edits: [{ uuid: a558.uuid }] }, ctx('apply').c), /changes nothing/);
 });

@@ -57,26 +57,46 @@ class Collector {
   }
 }
 
-/** Looks up the targets of all refs and returns the ones the requester may not see. */
+/**
+ * Looks up the targets of all refs and tags and returns the ones the requester may not see
+ * (by id). A target we can't resolve counts as hidden (fail closed).
+ */
 async function hiddenRefTargets(deps: ReadToolDeps, c: Collector, nodes: GNode[]): Promise<Map<number, Ref>> {
   const refs = new Map<number, Ref>();
-  for (const n of nodes) for (const r of n.refs) refs.set(r.id, r);
+  for (const n of nodes) {
+    for (const r of n.refs) refs.set(r.id, r);
+    for (const t of n.tags) if (!refs.has(t.id)) refs.set(t.id, { id: t.id, title: t.title, uuid: null, isPage: true });
+  }
   if (refs.size === 0) return new Map();
   const targets = await deps.reader.byIds([...refs.keys()]);
   const byId = new Map(targets.map((t) => [t.id, t]));
   const hidden = new Map<number, Ref>();
   for (const [id, ref] of refs) {
     const t = byId.get(id);
-    // A ref we can't resolve is treated as hidden (fail closed).
     if (!t || !c.visible(t, chainOf(t))) hidden.set(id, ref);
   }
   return hidden;
 }
 
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** User tags on a block that its text doesn't already show, as " #tag" (so models can see and change them). */
+export function tagSuffix(n: GNode, hidden: Map<number, Ref> = new Map()): string {
+  const out: string[] = [];
+  for (const t of n.tags) {
+    if (!t.title || t.ident?.startsWith('logseq.class/') || hidden.has(t.id)) continue;
+    if (new RegExp(`#(\\[\\[)?${escapeRe(t.title)}(?![\\w/-])`, 'i').test(n.title)) continue;
+    out.push(/\s/.test(t.title) ? `#[[${t.title}]]` : `#${t.title}`);
+  }
+  return out.length ? ` ${out.join(' ')}` : '';
+}
+
 function textOf(n: GNode, hiddenRefs: Map<number, Ref>): string {
   const mine = n.refs.filter((r) => hiddenRefs.has(r.id));
   const { text } = redactRefs(n.title, mine);
-  return clip(text.replace(/\r?\n/g, ' '), MAX_BLOCK_CHARS);
+  return clip(text.replace(/\r?\n/g, ' '), MAX_BLOCK_CHARS) + tagSuffix(n, hiddenRefs);
 }
 
 function propLines(n: GNode, indent: string): string[] {

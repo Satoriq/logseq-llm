@@ -69,7 +69,8 @@ export class FakeLogseq {
 
   constructor(opts: FakeOptions = {}) {
     this.byId = new Map((opts.entities ?? sampleEntities()).map((e) => [e.id, e]));
-    if (opts.aiTag !== false) this.byId.set(300, { id: 300, uuid: u(300), title: 'AI-GENERATED', name: 'ai-generated', ident: 'user.class/AI-GENERATED-x1' });
+    if (opts.aiTag !== false) this.byId.set(300, { id: 300, uuid: u(300), title: 'ai', name: 'ai', ident: 'user.class/ai-x1' });
+    this.byId.set(301, { id: 301, uuid: u(301), title: 'AI-GENERATED', name: 'ai-generated', ident: 'user.class/AI-GENERATED-x2' });
     this.owner = opts.owner ?? 'electron';
     this.graph = opts.graph ?? 'AI Sandbox';
   }
@@ -171,7 +172,15 @@ export class FakeLogseq {
     if (cmd === 'search tag') return this.#ok({ items: all.filter((e) => e.ident?.startsWith('user.class/') && contains(e)).map((e) => ({ 'db/id': e.id, 'block/title': e.title })) });
     if (req.command[0] === 'upsert' || req.command[0] === 'remove') {
       assert.equal(req.allowWrite, true, 'writes must come from the approved-write path');
-      const tags = String(o['update-tags'] ?? '').includes('AI-GENERATED') ? [300] : [];
+      // EDN vectors of tag names → tag entity ids.
+      const names = (v: unknown): string[] => [...String(v ?? '').matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => (m[1] as string).toLowerCase());
+      const tagIds = (v: unknown): number[] => names(v).map((n) => all.find((e) => e.ident?.startsWith('user.class/') && e.title.toLowerCase() === n)?.id).filter((x): x is number => x !== undefined);
+      const tags = tagIds(o['update-tags']);
+      const removeTags = tagIds(o['remove-tags']);
+      if (cmd === 'upsert tag') {
+        const e = this.#new({ title: String(o.name), name: String(o.name).toLowerCase(), ident: `user.class/${String(o.name)}-new` });
+        return this.#ok({ result: [e.id] });
+      }
       if (cmd === 'upsert block' && o['blocks-file']) {
         const md = readFileSync(String(o['blocks-file']), 'utf8');
         const lines = md.split('\n').filter((l) => /^\s*- /.test(l));
@@ -195,8 +204,8 @@ export class FakeLogseq {
       if (cmd === 'upsert block' && o.uuid) {
         const e = all.find((x) => x.uuid === o.uuid);
         if (!e) return { ok: false, exitCode: 1, json: null, stdout: '', stderr: 'not found', durationMs: 1 };
-        e.title = String(o.content);
-        e.tags = [...new Set([...(e.tags ?? []), ...tags])];
+        if (o.content !== undefined) e.title = String(o.content);
+        e.tags = [...new Set([...(e.tags ?? []), ...tags])].filter((t) => !removeTags.includes(t));
         return this.#ok({ result: [e.id] });
       }
       if (cmd === 'upsert block' && o.id) {

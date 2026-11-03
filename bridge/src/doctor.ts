@@ -206,14 +206,14 @@ export async function runDoctor(opts: DoctorOptions): Promise<boolean> {
           ? `allowed for "${config.graph}" (each write still needs Apply in the panel)`
           : `off for "${config.graph}" (add it to "writeGraphs" in config.json to allow approved writes)`,
       });
-      const tag = await cli.run({ command: ['search', 'tag'], graph: config.graph, options: { content: 'AI-GENERATED' } });
+      const tag = await cli.run({ command: ['search', 'tag'], graph: config.graph, options: { content: config.aiTag } });
       const items = ((tag.json as { data?: { items?: unknown } } | null)?.data?.items ?? []) as { 'block/title'?: unknown; title?: unknown }[];
-      const hasTag = tag.ok && Array.isArray(items) && items.some((i) => String(i['block/title'] ?? i.title ?? '').toLowerCase() === 'ai-generated');
+      const hasTag = tag.ok && Array.isArray(items) && items.some((i) => String(i['block/title'] ?? i.title ?? '').toLowerCase() === config.aiTag.toLowerCase());
       add({
-        name: 'AI-GENERATED tag',
-        ok: hasTag,
+        name: `#${config.aiTag} tag`,
+        ok: hasTag || canWrite,
         warnOnly: true,
-        detail: hasTag ? 'exists' : `missing; create it once with: logseq upsert tag --graph="${config.graph}" --name=AI-GENERATED`,
+        detail: hasTag ? 'exists' : canWrite ? 'not there yet; the bridge creates it with the first write' : 'missing (writes are off anyway)',
       });
     }
 

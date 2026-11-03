@@ -4,7 +4,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { parseRule } from './policy/rules.ts';
 
 export const BRIDGE_NAME = 'logseq-ai-bridge';
-export const BRIDGE_VERSION = '0.4.0';
+export const BRIDGE_VERSION = '0.5.0';
 export const DEFAULT_PORT = 47615;
 export const MIN_NODE_MAJOR = 26;
 
@@ -35,6 +35,8 @@ export type BridgeConfig = {
    *   all        everything goes in directly (still checked and logged)
    */
   autoApply: Record<string, AutoApplyMode>;
+  /** Tag put on the top block of whatever the AI writes. Created automatically in writable graphs. */
+  aiTag: string;
   cliTimeoutMs: number;
   cliConcurrency: number;
   /** Pass --restricted to claude (no user/project settings, no code tools). Default true. */
@@ -95,6 +97,7 @@ export function defaultConfig(): BridgeConfig {
     graph: null,
     writeGraphs: [],
     autoApply: {},
+    aiTag: 'ai',
     cliTimeoutMs: 15000,
     cliConcurrency: 2,
     claudeRestricted: true,
@@ -166,6 +169,11 @@ export function mergeConfig(base: BridgeConfig, raw: unknown): BridgeConfig {
   if (input.writeGraphs !== undefined) {
     if (!isStringArray(input.writeGraphs)) throw new Error('config.json: "writeGraphs" must be an array of strings');
     out.writeGraphs = [...input.writeGraphs];
+  }
+  if (input.aiTag !== undefined) {
+    const t = input.aiTag;
+    if (typeof t !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_\-/]{0,59}$/.test(t)) throw new Error('config.json: "aiTag" must be a tag name like "ai" (letters, digits, - _ /)');
+    out.aiTag = t;
   }
   if (input.autoApply !== undefined) {
     const a = input.autoApply;

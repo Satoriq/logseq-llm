@@ -457,7 +457,7 @@ New in this step:
   - Your note on a Reject goes back to the AI.
 - **Apply runs exactly the previewed command.** For `insert_blocks`, the CLI's
   own `--dry-run` checks it first.
-- **Tagging:** everything the AI writes gets `#AI-GENERATED`.
+- **Tagging:** the top block of whatever the AI writes gets `#ai`. Blocks under it, and later edits under it, aren't tagged again.
 - **Checks before a card is even shown:**
   - the graph must be in `writeGraphs`
   - a cloud model can't write to blocks it can't see (`#private`, local-only)
@@ -486,11 +486,8 @@ plugin: Settings → Plugins → Logseq AI → off → on.
 
 ### 2. Allow approved writes in the sandbox only
 
-Create the tag once (this writes one tag to AI Sandbox):
-
-```bash
-logseq upsert tag --graph="AI Sandbox" --name=AI-GENERATED
-```
+The bridge creates the `#ai` tag by itself with the first write (setting
+`aiTag`, default `"ai"`).
 
 Add AI Sandbox to `writeGraphs`:
 
@@ -502,7 +499,7 @@ node -e 'const fs=require("fs");const f=process.env.HOME+"/Library/Application S
 cd "$HOME/logseq-llm/bridge" && node bin/logseq-ai-bridge.ts doctor
 ```
 
-Expected: `ok writes: allowed for "AI Sandbox"` and `ok AI-GENERATED tag: exists`.
+Expected: `ok writes: allowed for "AI Sandbox"`, and the `#ai tag` line says it exists or will be created with the first write.
 Restart the bridge so it picks up the new config.
 
 ### 3. Preview from Terminal (writes nothing)
@@ -519,7 +516,7 @@ AI Test is unchanged.
 
 1. *"Add a short summary of this page as a new block at the end of AI Test."*
    A card appears and the reply shows "Waiting for your approval…". Click
-   **Apply**. The block appears in Logseq with the `#AI-GENERATED` tag, and the
+   **Apply**. The block appears in Logseq with the `#ai` tag, and the
    card says `✓ Applied`.
 2. Ask for another addition, type a note such as *"too long"*, then click
    **Reject**. Nothing is written; Claude sees your note.
@@ -527,7 +524,7 @@ AI Test is unchanged.
    shows Before (struck through) and After. Several edits come as one card
    (`update_blocks`).
 4. *"Add a task to buy pears on AI Test."* After Apply, a task appears,
-   tagged `#AI-GENERATED`.
+   tagged `#ai`.
 5. *"Delete the summary block you added."* The card lists exactly what
    would be deleted, and the button says **Delete**.
 6. Privacy: *"Edit the block that says 'This one is secret'."* Claude
@@ -586,9 +583,19 @@ Try it: *"Write a 4-line poem on AI Test, then make the first line of
 'Apples are red' bold."* On the first card, click **Apply all**. The edit then
 shows `applying in 2s`, and you can let it run or Abort it.
 
+### 4d. Tags
+
+- The AI now sees tags at the end of each line (`Apples are red #ai`).
+- It can add or remove tags with one `update_blocks` change, without rewriting
+  the text.
+- To clean up the old tag, ask: *"Remove #AI-GENERATED from all blocks on this
+  page."* You get one card, `Change tags on N blocks`.
+- Afterwards you can delete the old `AI-GENERATED` tag page in Logseq if you
+  like.
+
 ### Which build is running?
 
-The panel's status line shows `● Connected · panel 0.4.0 · bridge 0.4.0`. If
+The panel's status line shows `● Connected · panel 0.4.0 · bridge 0.5.0`. If
 it shows no version numbers, Logseq still runs an old plugin build. Run
 `npm run build` in `plugin/`, then switch the plugin off and on. Approval cards
 need panel ≥ 0.2.0; batched edits need 0.3.0; Apply all, Abort and folding need 0.4.0.
