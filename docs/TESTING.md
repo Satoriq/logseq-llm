@@ -238,3 +238,107 @@ logseq server list
 
 Expected: `Open the graph "AI Sandbox" in Logseq first…`, and `server list`
 shows **no** new `cli` worker. Switch back to AI Sandbox afterwards.
+
+## Step 1c: Claude through your own `claude` (Pro plan)
+
+New in this step:
+
+- **The `claude` provider:** the bridge runs your own `claude -p` with the
+  locked-down flags from PLAN §4.6.
+  - no built-in tools
+  - no user or project settings
+  - no other MCP servers
+  - no slash commands
+  - **no `ANTHROPIC_API_KEY` passed on**, so it can only use your Pro login
+- **`/mcp`:** the bridge's tool endpoint for `claude`.
+  - It offers the read-only tools from step 1b, filtered as **cloud**, so
+    `#private` and local-only blocks never reach Claude.
+  - Each turn gets a fresh token, which stops working when the turn ends.
+- **Startup guard:** if `claude` starts with any tool the bridge didn't allow,
+  the bridge stops it.
+- **Context:** the page or blocks you have open are filtered as cloud first.
+- **Switching into Claude** from a local provider passes along your messages,
+  but not the local model's replies.
+
+This step uses a little of your Pro usage. Keep **AI Sandbox** open in Logseq.
+
+### 1. Update and run the tests
+
+```bash
+cd "$HOME/logseq-llm/bridge" && git pull && node --test "test/**/*.test.ts"
+```
+
+Expected: `# pass 49`, `# fail 0`. The tests use a fake `claude`; nothing
+leaves your Mac.
+
+### 2. One real Claude turn through the bridge
+
+```bash
+node bin/logseq-ai-bridge.ts check-claude
+```
+
+Expected, roughly:
+
+```
+command: …/claude -p --verbose … --restricted --tools "" --strict-mcp-config …
+tool:   reading page "AI Test"
+        → ok: 4 item(s) (2 hidden)
+answer: 2
+result: end in … s
+check-claude: OK
+```
+
+The answer is the number of top-level blocks a cloud model can see on AI Test
+("Apples are red" and "See [[AI Test 2]]").
+
+- If you see a `notice: … apiKeySource …`, stop and tell me: `claude` would
+  be billing an API key instead of your Pro plan.
+- If it fails with an error about `--restricted`, set `"claudeRestricted": false`
+  in config.json, rerun it, and tell me.
+
+### 3. A real chat over curl
+
+Window 1:
+
+```bash
+node bin/logseq-ai-bridge.ts start
+```
+
+Window 2 (the stream):
+
+```bash
+cd "$HOME/logseq-llm/bridge" && TOKEN=$(node bin/logseq-ai-bridge.ts token) && B=http://127.0.0.1:47615 && CHAT=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"title":"first claude chat"}' $B/v1/chats | node -pe 'JSON.parse(require("fs").readFileSync(0)).chat.id') && echo "CHAT=$CHAT" && curl -N -H "Authorization: Bearer $TOKEN" -H 'Accept: text/event-stream' "$B/v1/chats/$CHAT/events?after=0"
+```
+
+Window 3: set the same `TOKEN`, `B` and `CHAT` (the id printed in window 2),
+then ask:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"text":"What does my AI Test page say about apples? Cite the blocks.","provider":"claude","model":"sonnet","effort":"low"}' $B/v1/chats/$CHAT/messages
+```
+
+Expected in window 2: `turn.start`, `tool.start`/`tool.end`, a stream of
+`text.delta` events citing `[[a558ac4e-…]]`, and `turn.end`.
+
+Privacy check: ask in the same chat
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"text":"Are there any secret or private notes on AI Test? Quote them.","provider":"claude","model":"sonnet","effort":"low"}' $B/v1/chats/$CHAT/messages
+```
+
+Expected: Claude doesn't know about "This one is secret" or "Local only note".
+The second turn reuses the same Claude session (`--resume`).
+
+### 4. Audit log
+
+```bash
+tail -n 5 "$HOME/Library/Application Support/logseq-ai/audit.jsonl"
+```
+
+Expected: `tool` entries with `"locality":"cloud"`, the block ids that were
+sent and the hidden count. There is no note text.
+
+Note: Claude Code keeps its own transcript of these sessions under
+`~/.claude/projects/` (in a folder named after `…/logseq-ai/claude-cwd`). That
+is your normal Claude Code history; "delete chat" will clean it up in a later
+step.

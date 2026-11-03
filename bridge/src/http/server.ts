@@ -9,6 +9,7 @@ import { BRIDGE_NAME, BRIDGE_VERSION } from '../config.ts';
 import { sseFrame } from '../events.ts';
 import { log } from '../log.ts';
 import { isEffort } from '../providers/types.ts';
+import type { McpEndpoint } from '../mcp/endpoint.ts';
 
 /**
  * HTTP API on 127.0.0.1. Checks, in order, for every request:
@@ -25,6 +26,8 @@ export type ServerDeps = {
   tokens: Tokens;
   store: ChatStore;
   turns: TurnRunner;
+  /** MCP endpoint for `claude -p` (per-process tokens). Optional so tests can omit it. */
+  mcp?: McpEndpoint;
 };
 
 const MAX_BODY = 1024 * 1024;
@@ -177,6 +180,26 @@ export function createBridgeServer(deps: ServerDeps): Server {
 
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${actualPort()}`);
     const parts = url.pathname.split('/').filter((p) => p !== '');
+
+    // MCP endpoint for claude: its own per-process tokens, never reachable from a browser page.
+    if (url.pathname === '/mcp') {
+      if (origin !== undefined) throw new HttpError(403, 'no browser access to /mcp');
+      const session = deps.mcp?.sessions.find(bearerFrom(req.headers.authorization)) ?? null;
+      if (!deps.mcp || !session) throw new HttpError(401, 'missing or invalid token');
+      if (req.method !== 'POST') {
+        res.writeHead(405, { Allow: 'POST' });
+        res.end();
+        return;
+      }
+      const reply = await deps.mcp.handle(await readJson(req), session);
+      if (reply.body === undefined) {
+        res.writeHead(reply.status);
+        res.end();
+      } else {
+        send(res, reply.status, reply.body);
+      }
+      return;
+    }
 
     // Minimal health check without a token (no graph data, no chat data).
     if (req.method === 'GET' && url.pathname === '/v1/health' && !req.headers.authorization) {

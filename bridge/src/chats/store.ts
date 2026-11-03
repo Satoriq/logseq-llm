@@ -44,6 +44,8 @@ export type ChatMeta = {
   provider?: string;
   model?: string;
   effort?: string;
+  /** claude -p session id (`--session-id` on the first turn, `--resume` afterwards). */
+  claudeSessionId?: string;
 };
 
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

@@ -29,6 +29,8 @@ export type BridgeConfig = {
   writeGraphs: string[];
   cliTimeoutMs: number;
   cliConcurrency: number;
+  /** Pass --restricted to claude (no user/project settings, no code tools). Default true. */
+  claudeRestricted: boolean;
   policy: PolicyConfig;
 };
 
@@ -83,6 +85,7 @@ export function defaultConfig(): BridgeConfig {
     writeGraphs: [],
     cliTimeoutMs: 15000,
     cliConcurrency: 2,
+    claudeRestricted: true,
     policy: { deny: [], allow: [] },
   };
 }
@@ -159,6 +162,10 @@ export function mergeConfig(base: BridgeConfig, raw: unknown): BridgeConfig {
       throw new Error(`config.json: "${key}" must be a positive integer`);
     }
     out[key] = v;
+  }
+  if (input.claudeRestricted !== undefined) {
+    if (typeof input.claudeRestricted !== 'boolean') throw new Error('config.json: "claudeRestricted" must be true or false');
+    out.claudeRestricted = input.claudeRestricted;
   }
   if (input.policy !== undefined) {
     const p = input.policy;

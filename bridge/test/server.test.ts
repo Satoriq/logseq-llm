@@ -153,7 +153,14 @@ test('body checks: content type, size, JSON shape', async () => {
   assert.equal((await call('POST', '/v1/chats', { headers: { ...auth(), 'content-type': 'text/plain' }, rawBody: '{}' })).status, 415);
   assert.equal((await call('POST', '/v1/chats', { headers: auth(), rawBody: '{nope' })).status, 400);
   assert.equal((await call('POST', '/v1/chats', { headers: auth(), rawBody: '[1,2]' })).status, 400);
-  assert.equal((await call('POST', '/v1/chats', { headers: auth(), rawBody: JSON.stringify({ title: 'x'.repeat(2 * 1024 * 1024) }) })).status, 413);
+  // The server refuses an oversized body before reading all of it. Depending on the OS the client
+  // either reads the 413 or gets a reset while still uploading (macOS); both mean "refused".
+  const big = await call('POST', '/v1/chats', { headers: auth(), rawBody: JSON.stringify({ title: 'x'.repeat(2 * 1024 * 1024) }) }).then(
+    (r) => r.status,
+    (e: NodeJS.ErrnoException) => (e.code === 'ECONNRESET' || e.code === 'EPIPE' ? 'reset' : Promise.reject(e)),
+  );
+  assert.ok(big === 413 || big === 'reset', `got ${big}`);
+  assert.equal((await call('GET', '/v1/health')).status, 200, 'server still healthy');
 });
 
 test('chat ids are validated (no path traversal)', async () => {

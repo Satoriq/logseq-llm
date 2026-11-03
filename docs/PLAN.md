@@ -17,6 +17,8 @@
 | 2026-11-03 | Sandbox graph "AI Sandbox" created and set as `graph` in config.json. |
 | 2026-11-03 | Graph reads use **only `query` with the bridge's own pull patterns** (plus `search`/`list` for ids). `show` is not used, because its output omits user properties. Property and tag idents carry random suffixes, so rules match by title. The value blocks Logseq creates for text properties (`created-from-property`) are skipped. |
 | 2026-11-03 | Unknown `ai-access` values hide the block (fail closed), and so do blocks whose page can't be resolved. A hidden page answers like a missing page. |
+| 2026-11-03 | `claude -p` runs **one process per turn** and continues the chat with `--resume`; that's simpler and cheaper on battery than a long-lived process. Input goes in on stdin (`--input-format text`), so prompts aren't visible in `ps`. The bridge strips `ANTHROPIC_API_KEY` from the child environment and warns if `apiKeySource` isn't `none`. |
+| 2026-11-03 | When a chat switches into Claude, the bridge passes along the user's messages and earlier cloud replies only. Replies from local models stay local until the step-5 consent card exists. |
 | open | Q5 voice edits, Q6 trigger, Q7 D approval (defaults in §3). |
 
 An AI chat panel inside Logseq DB (desktop, macOS) for personal use. It has a
@@ -642,7 +644,7 @@ text to a cloud model. Step 0 is new.
 | 0 | Fact check on your Mac (read-only commands, §8) and a **sandbox DB graph** you create in Logseq | You paste the outputs |
 | 1a ✅ | Bridge skeleton: server with Host, Origin and token checks, tokens, event log, SSE and long-poll, transcripts, audit log, safe CLI wrapper, echo test provider, `doctor` | `docs/TESTING.md` §1a: `node --test`, `doctor`, `curl` |
 | 1b ✅ | **Read-only** graph tools, the full allow/deny rules, `#private` and `ai-access::`, ref redaction, the open-graph guard, and the `tool` command | `docs/TESTING.md` §1b |
-| 1c | `claude -p` provider and the MCP endpoint, with the exact command line in §4.6 | `doctor --live-claude`; a real chat over `curl` |
+| 1c ✅ | `claude -p` provider and the `/mcp` endpoint (per-turn tokens, read tools filtered as cloud), the startup guard, context, handoff, `check-claude` | `docs/TESTING.md` §1c |
 | 2 | Plugin panel injected into the DOM: side setting, pickers, streaming, "…" indicator, tool steps, page and selection context | `npm run build`; load unpacked in Logseq; confirm the plugin origin in DevTools; chat |
 | 3 | Writes: dry-run preview and approval cards, `#AI-GENERATED`, all allow/deny entry types, `writeGraphs` | Approve and reject writes in the sandbox graph |
 | 4 | Anthropic and OpenAI API providers, with keys in the Keychain | Switch providers mid-chat |

@@ -1,21 +1,22 @@
 #!/usr/bin/env node
-import { randomUUID } from 'node:crypto';
 import { loadOrCreateTokens, rotateTokens } from '../src/auth.ts';
 import { AuditLog } from '../src/audit.ts';
-import { ChatStore } from '../src/chats/store.ts';
-import { TurnRunner } from '../src/chats/turns.ts';
 import { BRIDGE_NAME, BRIDGE_VERSION, dataPaths, defaultDataDir, ensureDataDirs, loadConfig, MIN_NODE_MAJOR } from '../src/config.ts';
-import { buildGraph } from '../src/app.ts';
+import { buildGraph, createRuntime } from '../src/app.ts';
+import { checkClaude } from '../src/check-claude.ts';
 import { runDoctor } from '../src/doctor.ts';
-import { createBridgeServer, listen, shutdown } from '../src/http/server.ts';
+import { shutdown } from '../src/http/server.ts';
 import { log } from '../src/log.ts';
-import { EchoProvider } from '../src/providers/echo.ts';
+import { CLAUDE_MODELS } from '../src/providers/claude-cli.ts';
+import { isEffort } from '../src/providers/types.ts';
 
 const USAGE = `${BRIDGE_NAME} ${BRIDGE_VERSION}
 
 Usage:
   node bin/logseq-ai-bridge.ts start [--port <n>]
   node bin/logseq-ai-bridge.ts doctor [--sample-page "<title>"] [--sample-search "<text>"]
+  node bin/logseq-ai-bridge.ts check-claude [--page "<title>"] [--model sonnet] [--effort low]
+                                               one real claude turn through the bridge (uses a little Pro usage)
   node bin/logseq-ai-bridge.ts tools          list the graph tools models get
   node bin/logseq-ai-bridge.ts tool <name> ['<json args>'] [--as cloud|local]
                                                run one tool and print exactly what a model would see
@@ -74,6 +75,16 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (cmd === 'check-claude') {
+    const model = flag(args, '--model') ?? 'sonnet';
+    if (!CLAUDE_MODELS.some((m) => m.id === model)) throw new Error(`--model must be one of ${CLAUDE_MODELS.map((m) => m.id).join(', ')}`);
+    const effort = flag(args, '--effort') ?? 'low';
+    if (!isEffort(effort) || effort === 'off') throw new Error('--effort must be auto, low, medium, high, xhigh or max');
+    const ok = await checkClaude({ config, paths, page: flag(args, '--page') ?? 'AI Test', model, effort });
+    process.exitCode = ok ? 0 : 1;
+    return;
+  }
+
   if (cmd === 'tools') {
     for (const t of buildGraph(config).tools) process.stdout.write(`${t.name} (${t.kind})\n  ${t.description}\n`);
     return;
@@ -107,11 +118,8 @@ async function main(): Promise<void> {
     const port = portArg !== undefined ? Number(portArg) : config.port;
     if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('--port must be 1024-65535');
     const tokens = await loadOrCreateTokens(paths.tokens);
-    const store = new ChatStore(paths.chats);
-    const audit = new AuditLog(paths.audit);
-    const turns = new TurnRunner({ store, providers: [new EchoProvider()], audit, epoch: randomUUID() });
-    const server = createBridgeServer({ port, allowedOrigins: config.allowedOrigins, tokens, store, turns });
-    const actual = await listen(server, port);
+    const { server, turns, listen } = await createRuntime({ config, paths, tokens });
+    const actual = await listen(port);
     log.info(`${BRIDGE_NAME} ${BRIDGE_VERSION} listening on http://127.0.0.1:${actual}`, {
       dataDir: paths.root,
       allowedOrigins: config.allowedOrigins,
