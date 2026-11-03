@@ -448,7 +448,7 @@ shell, file tools, web tools or raw CLI access.
   - `get_backlinks`
 - **Write** (all preview then approve):
   - `insert_blocks` (a block tree at a target and position)
-  - `update_block` (content, tags, properties)
+  - `update_blocks` (one or more blocks: content, tags)
   - `create_task`, `create_page`
   - `remove_block`
 - **Editor** (run by the plugin):
@@ -478,7 +478,7 @@ claude -p \
   --tools "" \
   --strict-mcp-config \
   --mcp-config "<data>/run/mcp-<chatId>.json" \
-  --allowedTools "mcp__lsq__search_blocks,mcp__lsq__search_pages,mcp__lsq__get_page,mcp__lsq__get_block,mcp__lsq__list_tasks,mcp__lsq__list_pages,mcp__lsq__get_backlinks,mcp__lsq__insert_blocks,mcp__lsq__update_block,mcp__lsq__create_task,mcp__lsq__create_page,mcp__lsq__remove_block,mcp__lsq__open_page,mcp__lsq__open_block,mcp__lsq__insert_at_cursor" \
+  --allowedTools "mcp__lsq__search_blocks,mcp__lsq__search_pages,mcp__lsq__get_page,mcp__lsq__get_block,mcp__lsq__list_tasks,mcp__lsq__list_pages,mcp__lsq__get_backlinks,mcp__lsq__insert_blocks,mcp__lsq__update_blocks,mcp__lsq__create_task,mcp__lsq__create_page,mcp__lsq__remove_block,mcp__lsq__open_page,mcp__lsq__open_block,mcp__lsq__insert_at_cursor" \
   --permission-mode dontAsk \
   --permission-prompts none \
   --disable-slash-commands \

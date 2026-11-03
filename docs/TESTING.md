@@ -447,7 +447,7 @@ its styles disappear completely.
 
 New in this step:
 
-- **Five write tools:** `insert_blocks`, `update_block`, `create_task`,
+- **Five write tools:** `insert_blocks`, `update_blocks`, `create_task`,
   `create_page` and `remove_block`.
 - **Approval card:** every change shows up as a card in the panel first.
   - It shows the target, a preview (outline, before/after, or exactly what would
