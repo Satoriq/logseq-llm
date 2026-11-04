@@ -146,14 +146,14 @@ test('each box covers its own kind of change, and only that', async () => {
   const uuid = sampleEntities().find((e) => e.title.startsWith('Apples'))?.uuid as string;
   const add = { page: 'AI Test', markdown: '- plain text' };
   const edit = { edits: [{ uuid, content: 'Apples are green' }] };
-  const del = { uuid };
+  const del = { uuids: [uuid] };
 
   const w = await withBoxes({ ...OFF, writes: true });
-  assert.deepEqual([await w.auto('insert_blocks', add), await w.auto('update_blocks', edit), await w.auto('remove_block', del)], [true, false, false]);
+  assert.deepEqual([await w.auto('insert_blocks', add), await w.auto('update_blocks', edit), await w.auto('remove_blocks', del)], [true, false, false]);
   const e = await withBoxes({ ...OFF, edits: true });
-  assert.deepEqual([await e.auto('insert_blocks', add), await e.auto('update_blocks', edit), await e.auto('remove_block', del)], [false, true, false]);
+  assert.deepEqual([await e.auto('insert_blocks', add), await e.auto('update_blocks', edit), await e.auto('remove_blocks', del)], [false, true, false]);
   const d = await withBoxes({ ...OFF, deletes: true });
-  assert.deepEqual([await d.auto('insert_blocks', add), await d.auto('update_blocks', edit), await d.auto('remove_block', del)], [false, false, true]);
+  assert.deepEqual([await d.auto('insert_blocks', add), await d.auto('update_blocks', edit), await d.auto('remove_blocks', del)], [false, false, true]);
 });
 
 test('saved boxes replace autoApply; nothing saved leaves it in charge', async () => {

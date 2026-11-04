@@ -59,6 +59,7 @@ function cardValue(e: PropEntry): string {
 
 const MAX_BLOCKS = 200;
 const MAX_CHARS = 50_000;
+const MAX_REMOVE = 100;
 
 export type WriteToolDeps = {
   run: (req: CliRequest) => Promise<CliResult>;
@@ -197,15 +198,22 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
   const underAiTag = (nodes: readonly GNode[]): boolean =>
     nodes.some((n) => n.tags.some((t) => t.title.toLowerCase() === aiTag.toLowerCase()));
 
-  const visibleBlock = async (uuid: string, ctx: ToolContext): Promise<{ node: GNode; chain: GNode[] }> => {
-    if (!isUuid(uuid)) throw new ToolInputError('"uuid" must be a block uuid');
-    const node = (await deps.reader.byUuids([uuid]))[0];
-    const missing = new ToolInputError(`No block with id ${uuid}.`);
-    if (!node || node.createdFromProperty !== null || isPage(node)) throw missing;
-    const chain = chainOf(node);
-    if (!visibleTo(deps.policy.evaluate({ node, chain }).visibility, ctx.locality)) throw missing;
-    return { node, chain };
+  /** One query for all of them. Hidden and missing read the same, so a refusal says nothing about what's there. */
+  const visibleBlocks = async (uuids: string[], ctx: ToolContext): Promise<{ node: GNode; chain: GNode[] }[]> => {
+    for (const uuid of uuids) if (!isUuid(uuid)) throw new ToolInputError('"uuid" must be a block uuid');
+    const nodes = await deps.reader.byUuids(uuids);
+    return uuids.map((uuid) => {
+      const node = nodes.find((n) => n.uuid?.toLowerCase() === uuid.toLowerCase());
+      const missing = new ToolInputError(`No block with id ${uuid}.`);
+      if (!node || node.createdFromProperty !== null || isPage(node)) throw missing;
+      const chain = chainOf(node);
+      if (!visibleTo(deps.policy.evaluate({ node, chain }).visibility, ctx.locality)) throw missing;
+      return { node, chain };
+    });
   };
+
+  const visibleBlock = async (uuid: string, ctx: ToolContext): Promise<{ node: GNode; chain: GNode[] }> =>
+    (await visibleBlocks([uuid], ctx))[0] as { node: GNode; chain: GNode[] };
 
   const visiblePage = async (title: string, ctx: ToolContext): Promise<GNode> => {
     const page = await deps.reader.pageByTitle(title);
@@ -266,7 +274,7 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
       // Additions skip the card only when it would show no warnings (links, images, new pages, hidden refs).
       let auto = mode === 'all' || ((mode === 'additions' || mode === 'own') && ADDITIONS.has(name) && clean);
       // The boxes cover blocks, tasks and pages, never memory, and a warning always gets the card.
-      const box = ADDITIONS.has(name) ? 'writes' : name === 'update_blocks' ? 'edits' : name === 'remove_block' ? 'deletes' : null;
+      const box = ADDITIONS.has(name) ? 'writes' : name === 'update_blocks' ? 'edits' : name === 'remove_blocks' ? 'deletes' : null;
       if (boxes && box && boxes[box] && clean) auto = true;
       // "own": edits/deletes skip it too, if every block they touch was added by the AI in this chat.
       if (!auto && mode === 'own' && clean && ctx.chatId && deps.own && prepared.ownTargets && prepared.ownTargets.length > 0) {
@@ -575,7 +583,7 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
         seen.add(uuid);
         const rawContent = argString(ed, 'content', { required: false, max: 20_000 });
         const content = rawContent === undefined ? null : rawContent.replace(/\r\n?/g, '\n').trim();
-        if (content === '') throw new ToolInputError('an edit has empty "content" (use remove_block to delete a block)');
+        if (content === '') throw new ToolInputError('an edit has empty "content" (use remove_blocks to delete a block)');
         const add = tagList(ed.add_tags, 'add_tags');
         const remove = tagList(ed.remove_tags, 'remove_tags');
         const setRaw = ed.set_properties;
@@ -807,44 +815,87 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
     }),
   };
 
-  const removeBlock: ToolDef = {
-    name: 'remove_block',
+  const removeBlocks: ToolDef = {
+    name: 'remove_blocks',
     kind: 'write',
-    description: 'Propose deleting a block and everything under it. The user sees exactly what would be deleted and must approve it.',
-    inputSchema: { type: 'object', properties: { uuid: { type: 'string' } }, required: ['uuid'], additionalProperties: false },
+    description:
+      'Propose deleting one or more blocks, each with everything under it. Put all the blocks in ONE call. ' +
+      'The user sees exactly what would be deleted and must approve it.',
+    inputSchema: {
+      type: 'object',
+      properties: { uuids: { type: 'array', minItems: 1, maxItems: MAX_REMOVE, items: { type: 'string' } } },
+      required: ['uuids'],
+      additionalProperties: false,
+    },
     label: () => 'proposing a deletion',
-    run: withApproval('remove_block', async (args, ctx, graph) => {
-      const uuid = argString(args, 'uuid', { required: true, max: 64 }) as string;
-      const { node, chain } = await visibleBlock(uuid, ctx);
-      const page = chain.at(-1) as GNode;
-      const all = (await deps.reader.pageBlocks(page.id)).filter((b) => b.createdFromProperty === null);
-      const kids = new Map<number, GNode[]>();
-      for (const b of all) if (b.parentId !== null) kids.set(b.parentId, [...(kids.get(b.parentId) ?? []), b]);
-      for (const list of kids.values()) list.sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0));
+    run: withApproval('remove_blocks', async (args, ctx, graph) => {
+      if (!Array.isArray(args.uuids) || args.uuids.length === 0 || args.uuids.length > MAX_REMOVE) {
+        throw new ToolInputError(`"uuids" must be a list of 1 to ${MAX_REMOVE} block ids`);
+      }
+      const wanted = new Set(args.uuids.map((u) => String(u).toLowerCase()));
+      const listed = await visibleBlocks([...wanted], ctx);
+      // A block under another listed block goes with it, so it's deleted and counted once.
+      const roots = listed.filter(({ chain }) => !chain.some((c) => c.uuid && wanted.has(c.uuid.toLowerCase())));
+      const pages = new Map<number, typeof roots>();
+      for (const r of roots) {
+        const id = (r.chain.at(-1) as GNode).id;
+        pages.set(id, [...(pages.get(id) ?? []), r]);
+      }
+
       // The card shows you everything that would go, including blocks the AI can't see.
-      const lines = [`- ${node.title}`];
-      let total = 1;
+      const lines: string[] = [];
+      const subtree: string[] = [];
+      let total = 0;
       let unseen = 0;
-      const subtree: string[] = node.uuid ? [node.uuid.toLowerCase()] : [];
-      const walk = (id: number, c: GNode[], depth: number): void => {
-        for (const k of kids.get(id) ?? []) {
+      for (const group of pages.values()) {
+        const page = (group[0] as (typeof roots)[number]).chain.at(-1) as GNode;
+        const all = (await deps.reader.pageBlocks(page.id)).filter((b) => b.createdFromProperty === null);
+        const kids = new Map<number, GNode[]>();
+        for (const b of all) if (b.parentId !== null) kids.set(b.parentId, [...(kids.get(b.parentId) ?? []), b]);
+        for (const list of kids.values()) list.sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0));
+        // In page order, however the model listed them, so the card reads like the page.
+        const rank = new Map<number, number>();
+        const visit = (id: number): void => {
+          for (const k of kids.get(id) ?? []) {
+            rank.set(k.id, rank.size);
+            visit(k.id);
+          }
+        };
+        visit(page.id);
+        group.sort((a, b) => (rank.get(a.node.id) ?? rank.size) - (rank.get(b.node.id) ?? rank.size));
+
+        const walk = (id: number, c: GNode[], depth: number): void => {
+          for (const k of kids.get(id) ?? []) {
+            total += 1;
+            if (k.uuid) subtree.push(k.uuid.toLowerCase());
+            if (!visibleTo(deps.policy.evaluate({ node: k, chain: c }).visibility, ctx.locality)) unseen += 1;
+            lines.push(`${'  '.repeat(depth)}- ${k.title}`);
+            walk(k.id, [k, ...c], depth + 1);
+          }
+        };
+        if (pages.size > 1) lines.push(`${page.title}:`);
+        for (const { node, chain } of group) {
           total += 1;
-          if (k.uuid) subtree.push(k.uuid.toLowerCase());
-          if (!visibleTo(deps.policy.evaluate({ node: k, chain: c }).visibility, ctx.locality)) unseen += 1;
-          lines.push(`${'  '.repeat(depth)}- ${k.title}`);
-          walk(k.id, [k, ...c], depth + 1);
+          if (node.uuid) subtree.push(node.uuid.toLowerCase());
+          lines.push(`- ${node.title}`);
+          walk(node.id, [node, ...chain], 1);
         }
-      };
-      walk(node.id, [node, ...chain], 1);
+      }
       const warnings = unseen > 0 ? [`Also deletes ${unseen} block(s) that this AI can't see.`] : [];
+      const uuids = roots.map((r) => (r.node.uuid as string).toLowerCase());
+      const where = pages.size === 1 ? `on page "${((roots[0] as (typeof roots)[number]).chain.at(-1) as GNode).title}"` : `on ${pages.size} pages`;
       return {
-        approval: { tool: 'remove_block', title: `Delete ${total} block${total === 1 ? '' : 's'}`, target: `on page "${page.title}"`, body: { kind: 'remove', text: lines.join('\n') }, warnings },
-        targetUuids: node.uuid ? [node.uuid] : [],
+        approval: { tool: 'remove_blocks', title: `Delete ${total} block${total === 1 ? '' : 's'}`, target: where, body: { kind: 'remove', text: lines.join('\n') }, warnings },
+        targetUuids: uuids,
         ownTargets: subtree,
         apply: async () => {
-          const r = await run({ command: ['remove', 'block'], graph, options: { uuid: (node.uuid as string).toLowerCase() } });
+          // The CLI reports any id it's given as deleted, so a block that's gone has to be caught here.
+          // Ids come fresh from the uuids the card was built from: a card can wait a long time.
+          const live = await deps.reader.byUuids(uuids);
+          if (live.length !== uuids.length) throw new Error(`${uuids.length - live.length} of these blocks are already gone, so nothing was deleted. Read the page again first.`);
+          const r = await run({ command: ['remove', 'block'], graph, options: { id: `[${live.map((n) => n.id).join(',')}]` } });
           if (!r.ok) throw new Error(cliMessage(r));
-          return { summary: `deleted ${total} block(s)`, short: `deleted ${total} block${total === 1 ? '' : 's'}`, targetUuids: node.uuid ? [node.uuid] : [] };
+          return { summary: `deleted ${total} block(s)`, short: `deleted ${total} block${total === 1 ? '' : 's'}`, targetUuids: uuids };
         },
       };
     }),
@@ -963,5 +1014,5 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
     }),
   };
 
-  return [insertBlocks, updateBlocks, createTask, createPage, removeBlock, ...(deps.memory ? [remember, forget] : [])];
+  return [insertBlocks, updateBlocks, createTask, createPage, removeBlocks, ...(deps.memory ? [remember, forget] : [])];
 }

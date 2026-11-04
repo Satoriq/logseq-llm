@@ -160,7 +160,7 @@ export class ChangeCards {
       note.placeholder = 'Note for the AI if you reject (optional)';
       const reject = this.#button('lsai-reject', 'Reject', 'Do not make this change', () => void this.#send(card, 'reject', note.value.trim()));
       const all = this.#button('lsai-apply-all', 'Apply all', this.#applyAllHint, () => void this.#send(card, 'apply-all'));
-      const apply = this.#button('lsai-apply', a.tool === 'remove_block' ? 'Delete' : 'Apply', 'Make this change in your graph', () => void this.#send(card, 'apply'));
+      const apply = this.#button('lsai-apply', a.tool === 'remove_blocks' ? 'Delete' : 'Apply', 'Make this change in your graph', () => void this.#send(card, 'apply'));
       actions.append(note, reject, all, apply);
       status.textContent = 'Nothing is written until you click Apply.';
     }

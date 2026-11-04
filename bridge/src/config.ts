@@ -4,7 +4,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { parseRule } from './policy/rules.ts';
 
 export const BRIDGE_NAME = 'logseq-ai-bridge';
-export const BRIDGE_VERSION = '0.14.0';
+export const BRIDGE_VERSION = '0.15.0';
 
 /** The API providers (src/providers/api.ts). Here so a typo in apiModels stops the bridge. */
 export const API_PROVIDER_IDS = ['anthropic', 'openai', 'gemini', 'xai', 'deepseek', 'mistral', 'openrouter'];

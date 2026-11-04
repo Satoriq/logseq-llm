@@ -43,6 +43,7 @@
 | 2026-11-04 | **Settings window, first setting Auto-approve.** A ⚙ button in the panel opens a small window with three boxes: approve all writes, edits and deletes. They live in the bridge (`settings.json`, 0600), because it's what enforces them, and only the panel's token can change them: no tool, no connected app and no voice token can, so a model can't approve its own changes. Changes are in the audit log. Boxes are **per graph**, so ticking them on a test graph doesn't carry over. Once saved for a graph they replace `autoApply` for it, and until then they show what `autoApply` means. **A warning still gets the card** (web link, image, new page, hidden link, blocks the AI can't see), and memory always asks, because those are where a malicious note would do damage. Boxes cover every model and connected app. Edits and deletes keep the 2 s Abort window. Bridge 0.13.0, panel 0.9.0. |
 | 2026-11-04 | **A panel notices a restarted bridge.** A restart killed a running reply, and the panel kept showing "…" forever, because nothing arrives on a quiet chat. Every event stream now opens with a `log.hello` frame carrying the epoch, and the long-poll path compares epochs, so the panel reloads the chat, says the reply was lost and refreshes the version it shows. **Connected-app cards** sit under a "From connected apps" heading and leave 8 s after they finish, and old ones no longer come back on reload. They looked like part of the open chat. Panel 0.10.0. |
 | 2026-11-04 | **API providers (step 4):** Claude, OpenAI, Gemini, Grok, DeepSeek, Mistral and OpenRouter, each behind a key in the Keychain and only offered once it has one (`keys` lists them). Three formats behind one tool loop: Messages (Claude), Responses (OpenAI and xAI, because GPT-6 Astra and GPT-6.1 Sol need it for tool calling) and Chat Completions (the rest). Plain `fetch`, no SDK: the bridge keeps no runtime dependencies. All count as cloud, so they get the filtered transcript, context, memory and tools. Addresses are fixed in code, so config can't point a key at another host; `apiModels` can only add model ids. `store: false` keeps notes off OpenAI's and xAI's servers. Within a turn, thinking and reasoning go back unchanged. **DeepSeek's thinking is off,** because with tools it needs all earlier reasoning sent back and chats keep only text. **Claude uses `fallbacks: "default"`** on Opus, Sonnet and Fable: if a safety check declines, another Claude model answers, and the chat says so. History is capped at 40 messages, because every turn resends it and tokens cost money. Web search is off for these. Tested against fake servers only, as there are no keys yet. Bridge 0.14.0. |
+| 2026-11-04 | **Batch delete: `remove_blocks` replaces `remove_block`.** It takes up to 100 blocks: one card, in page order, and one CLI call (`remove block --id '[1,2]'`). One tool, not two, so small models have no choice to get wrong. A block under another listed block goes with it and is counted once. One hidden or unknown block refuses the whole list, in the same words as a missing one. **The CLI reports every id in a list as deleted, even ones that don't exist,** so at Apply the bridge looks the blocks up again by uuid. If any are gone, nothing is deleted: what the card showed is what goes. That also means a card that waited a long time can't hit a reused id. Bridge 0.15.0, panel 0.10.1. |
 | open | Q5 voice edits, Q6 trigger, Q7 D approval (defaults in §3). |
 
 An AI chat panel inside Logseq DB (desktop, macOS) for personal use. It has a
@@ -469,7 +470,7 @@ shell, file tools, web tools or raw CLI access.
   - `update_blocks` (one or more blocks: content, tags, properties, task status)
   - `remember`, `forget` (the "AI Memory" page only)
   - `create_task`, `create_page`
-  - `remove_block`
+  - `remove_blocks` (one or more blocks, each with everything under it)
 - **Editor** (run by the plugin):
   - `open_page`, `open_block`
   - `insert_at_cursor`, which is a write and so needs approval
@@ -497,7 +498,7 @@ claude -p \
   --tools "" \
   --strict-mcp-config \
   --mcp-config "<data>/run/mcp-<chatId>.json" \
-  --allowedTools "mcp__lsq__search_blocks,mcp__lsq__search_pages,mcp__lsq__get_page,mcp__lsq__get_block,mcp__lsq__list_tasks,mcp__lsq__list_pages,mcp__lsq__get_backlinks,mcp__lsq__insert_blocks,mcp__lsq__update_blocks,mcp__lsq__create_task,mcp__lsq__create_page,mcp__lsq__remove_block,mcp__lsq__open_page,mcp__lsq__open_block,mcp__lsq__insert_at_cursor" \
+  --allowedTools "mcp__lsq__search_blocks,mcp__lsq__search_pages,mcp__lsq__get_page,mcp__lsq__get_block,mcp__lsq__list_tasks,mcp__lsq__list_pages,mcp__lsq__get_backlinks,mcp__lsq__insert_blocks,mcp__lsq__update_blocks,mcp__lsq__create_task,mcp__lsq__create_page,mcp__lsq__remove_blocks,mcp__lsq__open_page,mcp__lsq__open_block,mcp__lsq__insert_at_cursor" \
   --permission-mode dontAsk \
   --permission-prompts none \
   --disable-slash-commands \

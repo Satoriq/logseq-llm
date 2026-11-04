@@ -431,11 +431,17 @@ export class FakeLogseq {
         return this.#ok({ result: [e.id] });
       }
       if (cmd === 'remove block') {
-        const root = all.find((e) => e.uuid === o.uuid);
         const drop = (id: number): void => {
           for (const k of [...this.byId.values()].filter((x) => x.parent === id)) drop(k.id);
           this.byId.delete(id);
         };
+        // Like the real CLI, a list reports every id as deleted, even one that isn't there.
+        if (o.id !== undefined) {
+          const ids = [...String(o.id).matchAll(/\d+/g)].map((m) => Number(m[0]));
+          for (const id of ids) drop(id);
+          return this.#ok({ 'deleted-ids': ids, 'missing-ids': [], result: null });
+        }
+        const root = all.find((e) => e.uuid === o.uuid);
         if (root) drop(root.id);
         return this.#ok({ result: root ? [root.id] : [] });
       }

@@ -25,7 +25,7 @@ const CLI_COMMANDS_USED: Record<string, string[]> = {
   query: ['--query', '--inputs'],
   'upsert block': ['--target-uuid', '--target-page', '--pos', '--content', '--blocks-file', '--dry-run', '--update-tags'],
   'upsert task': ['--status', '--content', '--target-page'],
-  'remove block': ['--uuid'],
+  'remove block': ['--uuid', '--id'],
 };
 
 const SAMPLE_BLOCKS_QUERY =

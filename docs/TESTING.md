@@ -448,7 +448,7 @@ its styles disappear completely.
 New in this step:
 
 - **Five write tools:** `insert_blocks`, `update_blocks`, `create_task`,
-  `create_page` and `remove_block`.
+  `create_page` and `remove_blocks`.
 - **Approval card:** every change shows up as a card in the panel first.
   - It shows the target, a preview (outline, before/after, or exactly what would
     be deleted), warnings, and **Reject / Apply**.
@@ -782,10 +782,10 @@ Run these from the `bridge` folder.
 node --test "test/**/*.test.ts"
 ```
 
-Expected: `pass 148`, `fail 0`.
+Expected: `pass 153`, `fail 0`.
 
 2. Load the new build, then switch the plugin off and on. The status line should show
-   `panel 0.10.0 · bridge 0.14.0`.
+   `panel 0.10.1 · bridge 0.15.0`.
 
 ```bash
 cd ../plugin && npm run build && cd ../bridge && node bin/logseq-ai-bridge.ts agent restart
@@ -922,9 +922,28 @@ node -e 'const fs=require("fs");const f=process.env.HOME+"/Library/Application S
 security delete-generic-password -s logseq-ai -a anthropic
 ```
 
+### 4n. Deleting several blocks at once
+
+`remove_blocks` takes a list of up to 100 blocks: one card, one change in Logseq. Everything
+under a listed block goes with it.
+
+1. Switch the plugin off and on. The status line should read `panel 0.10.1 · bridge 0.15.0`.
+2. On a test page in AI Sandbox, add five top-level lines, and give the third one a child.
+3. Ask for *"Delete the first four lines of this page"*, with any model.
+   - One card should appear, titled "Delete 5 blocks", listing them in page order with the
+     child under its parent. If the model picked the wrong lines, press Reject.
+   - Press **Delete**. All five go at once, and the last line stays.
+4. If "Approve all deletes" is on in ⚙, there's no card. A delete that includes a block the AI
+   can't see still gets one.
+5. **A block gone since the card:** ask for another delete of two lines. While the card is
+   waiting, delete one of them yourself, then press **Delete**. The card should fail with
+   "1 of these blocks are already gone, so nothing was deleted", and the other line stays.
+6. **Hidden blocks:** ask it to delete a `#private` block by id, together with a normal one.
+   The model is told there's no such block, no card appears and nothing is deleted.
+
 ### Which build is running?
 
-The panel's status line shows `● Connected · panel 0.10.0 · bridge 0.14.0`. If
+The panel's status line shows `● Connected · panel 0.10.1 · bridge 0.15.0`. If
 it shows no version numbers, Logseq still runs an old plugin build. Run
 `npm run build` in `plugin/`, then switch the plugin off and on. Approval cards
 need panel ≥ 0.2.0; batched edits need 0.3.0; Apply all, Abort and folding need 0.4.0; the ✎ instructions editor needs 0.5.0 and bridge 0.7.0; 🌐 web search needs 0.6.0 and bridge 0.8.0; the memory link needs 0.7.0 (memory itself is bridge 0.9.0); cards from connected apps need 0.8.0 and bridge 0.11.0; ⚙ settings need 0.9.0 and bridge 0.13.0; noticing a restarted bridge needs 0.10.0 and bridge 0.14.0.

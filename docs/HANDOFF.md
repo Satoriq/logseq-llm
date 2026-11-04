@@ -90,7 +90,7 @@ providers · 5 Ollama + escalation · 6 save chat · 7 D worker · 8 voice.
 | 8 voice helper | later |
 | UI polish pass (T3-Code-like) | later |
 
-**Current versions:** bridge **0.14.0**, panel **0.10.0**. The panel's status line
+**Current versions:** bridge **0.15.0**, panel **0.10.1**. The panel's status line
 shows both, which is how you tell which build is running.
 
 **Confirmed on the user's Mac:**
@@ -228,7 +228,8 @@ Ask the user for these results before building on them.
   - `insert_blocks`: an outline, with CLI `--dry-run` first.
   - `update_blocks`: up to 50 edits in one call. Each edit can change content,
     `add_tags`/`remove_tags`, `set_properties`/`remove_properties` and status.
-  - `create_task`, `create_page`, `remove_block`.
+  - `create_task`, `create_page`.
+  - `remove_blocks`: up to 100 blocks in one call, one card, each with everything under it.
   - `remember`, `forget`: these touch the memory page only.
 - **Output format:**
   - Each block line ends with `[id:<uuid>]`.
@@ -503,6 +504,12 @@ privacy filter. Never point a client at it. PLAN §6 assumed this server stays o
 **Claude Code's sandbox** can block writes to the data folder and local port binding. Then
 `agent` commands fail with `EPERM`, and the HTTP tests fail with `listen EPERM`.
 
+- **`logseq remove block --id '[1,2]'` proves nothing about what it deleted.** It lists every id under
+  `deleted-ids`, even ones that don't exist, and `missing-ids` stays empty. A page id in the list is
+  skipped and reported under `page-ids`.
+- **Blocks deleted through the CLI don't go to Logseq's recycle bin.** Pages do, unless `remove page --force`.
+- **The CLI's current graph is `Logseq DB`, not AI Sandbox.** Always pass `-g "AI Sandbox"` by hand.
+
 ## 8. Repo map
 
 ```
@@ -587,19 +594,17 @@ The real graph is out of scope for now. Next: try the API providers once there a
    The consent card is what lets a chosen part cross over.
    - **Plan (PLAN.md §4.8):** consent cards with Ask once / Switch this chat / Stay local /
      Review what's sent. Consult mode sends only the question.
-4. **Batch delete.** `remove_block` takes one block, so "remove these 22 lines" means 22 calls
-   and 22 cards, and small models lose track. Add one tool and one card for several blocks.
-5. **Step 6, save chat:** an `#AIChat` page, one block per message.
-6. **Step 7, the D worker:**
+4. **Step 6, save chat:** an `#AIChat` page, one block per message.
+5. **Step 7, the D worker:**
    - It watches comments mentioning the AI and #Tasks assigned to it, fed by
      `DB.onChanged` → bridge, with UUIDs only.
    - Its drafts wait as cards in an Inbox (open question Q7, default: every write
      needs approval).
    - It needs a mention page other than "ai", and it must ignore its own blocks.
-7. **Step 8, voice:** a Swift helper with a global hotkey. Open questions Q5 (voice
+6. **Step 8, voice:** a Swift helper with a global hotkey. Open questions Q5 (voice
    edits: add-only, confirmed with a click) and Q6 (the hotkey; Shortcuts support
    later).
-8. **UI polish pass** for the panel.
-9. **Ideas parked:**
+7. **UI polish pass** for the panel.
+8. **Ideas parked:**
    - WebFetch with a per-URL approval card;
    - a committed browser-test harness.

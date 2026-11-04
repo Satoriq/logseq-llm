@@ -128,15 +128,85 @@ test('update_blocks: before/after card and a warning when hidden links would be 
   assert.match(out.text, /^Applied: edited 1 block/);
 });
 
-test('remove_block shows everything that would go, including blocks hidden from the AI', async () => {
+test('remove_blocks shows everything that would go, including blocks hidden from the AI', async () => {
   const { tool, fake } = await setup();
   const { c, cards } = ctx('apply');
-  const out = await tool('remove_block').run({ uuid: '00000000-0000-4000-8000-000000000212' }, c);
+  const out = await tool('remove_blocks').run({ uuids: ['00000000-0000-4000-8000-000000000212'] }, c);
   assert.equal(cards[0]?.title, 'Delete 2 blocks');
   assert.match((cards[0]?.body as { text: string }).text, /Private child/);
   assert.ok(cards[0]?.warnings.some((w) => w.includes("1 block(s) that this AI can't see")));
   assert.match(out.text, /^Applied: deleted 2 block/);
   assert.equal(fake.byId.has(213), false);
+});
+
+const APPLES = 'a558ac4e-ae05-43f3-af22-f167c5f56975';
+const APPLES_CHILD = '54f76cdd-307a-436e-9716-f129841c97e6';
+const LINK = '05c4b96b-5012-4826-a902-693efb290e0d';
+const OTHER_PAGE = '00000000-0000-4000-8000-000000000207';
+
+test('remove_blocks: several blocks are one card and one CLI call, in page order, each counted once', async () => {
+  const { tool, fake } = await setup();
+  const { c, cards } = ctx('apply');
+  // Out of order, with a child of a listed block, and one block listed twice in different case.
+  const out = await tool('remove_blocks').run({ uuids: [LINK, APPLES_CHILD, APPLES, LINK.toUpperCase()] }, c);
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0]?.title, 'Delete 3 blocks');
+  assert.equal(cards[0]?.target, 'on page "AI Test"');
+  assert.deepEqual((cards[0]?.body as { text: string }).text.split('\n'), ['- Apples are red', '  - A child block about apples', '- See [[AI Test 2]]']);
+  assert.match(out.text, /^Applied: deleted 3 block/);
+  assert.deepEqual(fake.writes.map((w) => w.options?.id), ['[198,202]'], 'one call, and the child goes with its parent');
+  for (const id of [198, 199, 202]) assert.equal(fake.byId.has(id), false);
+});
+
+test('remove_blocks across pages names each page on the card', async () => {
+  const { tool, fake } = await setup();
+  const { c, cards } = ctx('apply');
+  await tool('remove_blocks').run({ uuids: [OTHER_PAGE, LINK] }, c);
+  assert.equal(cards[0]?.target, 'on 2 pages');
+  const text = (cards[0]?.body as { text: string }).text;
+  assert.match(text, /AI Test 2:\n- Buy apples/);
+  assert.match(text, /AI Test:\n- See \[\[AI Test 2\]\]/);
+  assert.equal(fake.byId.has(207) || fake.byId.has(202), false);
+});
+
+test('remove_blocks: one hidden or unknown block refuses the whole list, in the same words', async () => {
+  const { tool, fake } = await setup();
+  const { c, cards } = ctx('apply');
+  const hidden = '00000000-0000-4000-8000-000000000213';
+  const unknown = '00000000-0000-4000-8000-000000009999';
+  const words = async (uuid: string): Promise<string> => {
+    const err = await tool('remove_blocks').run({ uuids: [LINK, uuid] }, c).catch((e: Error) => e);
+    return (err as Error).message.replace(uuid, 'ID');
+  };
+  assert.equal(await words(hidden), 'No block with id ID.');
+  assert.equal(await words(unknown), 'No block with id ID.');
+  assert.equal(cards.length, 0);
+  assert.equal(fake.writes.length, 0);
+  // A page isn't a block, even with a good uuid.
+  await assert.rejects(tool('remove_blocks').run({ uuids: ['6aea4e44-d2e5-4bab-ac9c-1ff146d6b347'] }, c), /No block with id/);
+});
+
+test('remove_blocks: a block gone since the card means nothing is deleted, though the CLI would say it was', async () => {
+  const { tool, fake } = await setup();
+  const { c, outcomes } = ctx('apply');
+  const approve = c.approve as NonNullable<ToolContext['approve']>;
+  c.approve = async (req) => {
+    fake.byId.delete(202);
+    return approve(req);
+  };
+  const out = await tool('remove_blocks').run({ uuids: [APPLES, LINK] }, c);
+  assert.match(out.text, /1 of these blocks are already gone, so nothing was deleted/);
+  assert.match(outcomes[0] as string, /^failed:/);
+  assert.equal(fake.writes.length, 0);
+  assert.equal(fake.byId.has(198), true);
+});
+
+test('remove_blocks needs a list of 1 to 100', async () => {
+  const { tool } = await setup();
+  const { c } = ctx('apply');
+  await assert.rejects(tool('remove_blocks').run({ uuids: [] }, c), /list of 1 to 100/);
+  await assert.rejects(tool('remove_blocks').run({ uuid: APPLES }, c), /list of 1 to 100/);
+  await assert.rejects(tool('remove_blocks').run({ uuids: Array.from({ length: 101 }, () => APPLES) }, c), /list of 1 to 100/);
 });
 
 test('create_page refuses existing and denied names the same way; create_task tags the task', async () => {
@@ -218,7 +288,7 @@ test('autoApply "additions": plain additions skip the card, anything with a warn
   assert.match((await tool('insert_blocks').run({ page: 'AI Test', markdown: '- see https://example.com' }, c)).text, /rejected/, 'a web link → manual card');
   assert.match((await tool('insert_blocks').run({ page: 'AI Test', markdown: '- about [[Brand New]]' }, c)).text, /rejected/, 'a new page → manual card');
   assert.match((await tool('update_blocks').run({ edits: [{ uuid: 'a558ac4e-ae05-43f3-af22-f167c5f56975', content: 'Apples are green' }] }, c)).text, /rejected/, 'edits always need Apply');
-  assert.match((await tool('remove_block').run({ uuid: '54f76cdd-307a-436e-9716-f129841c97e6' }, c)).text, /rejected/, 'deletes always need Apply');
+  assert.match((await tool('remove_blocks').run({ uuids: ['54f76cdd-307a-436e-9716-f129841c97e6'] }, c)).text, /rejected/, 'deletes always need Apply');
   assert.deepEqual(seen.map((x) => x.auto), [true, true, false, false, false, false]);
   assert.equal(fake.writes.length, 3, 'insert + task + its tag');
 });
@@ -311,9 +381,9 @@ test('autoApply "own": edits and deletes of blocks the AI added in this chat ski
   // Another chat doesn't own them: card.
   assert.match((await tool('update_blocks').run({ edits: [{ uuid: ids[1] as string, content: 'z' }] }, mk('chat-2'))).text, /rejected/);
   // Delete the AI's whole poem (all own): auto.
-  assert.match((await tool('remove_block').run({ uuid: ids[0] as string }, c)).text, /^Applied: deleted 3 block/);
+  assert.match((await tool('remove_blocks').run({ uuids: [ids[0] as string] }, c)).text, /^Applied: deleted 3 block/);
   // Deleting a block of yours: card.
-  assert.match((await tool('remove_block').run({ uuid: '54f76cdd-307a-436e-9716-f129841c97e6' }, c)).text, /rejected/);
+  assert.match((await tool('remove_blocks').run({ uuids: ['54f76cdd-307a-436e-9716-f129841c97e6'] }, c)).text, /rejected/);
   assert.deepEqual(autos, [true, true, false, false, true, false]);
 });
 
@@ -345,7 +415,7 @@ test('auto edits wait a grace period and can be aborted in it', async () => {
     return () => l;
   })();
   const a = new Approvals({ events, requireUi: false });
-  const req: ApprovalRequest = { tool: 'remove_block', title: 't', target: 'g', body: { kind: 'text', text: 'b' }, warnings: [], auto: true, graceMs: 300 };
+  const req: ApprovalRequest = { tool: 'remove_blocks', title: 't', target: 'g', body: { kind: 'text', text: 'b' }, warnings: [], auto: true, graceMs: 300 };
   const p = a.request('c', 't', req);
   const id = events().since(0).events.find((e) => e.type === 'approval.request')?.data.id as string;
   assert.equal(a.decide(id, 'abort'), true);
