@@ -720,7 +720,7 @@ search happened, but not what was searched. To remove the button completely, add
 2. Install the agent:
 
 ```bash
-cd "/Users/lol/Chrome/logseq AI/logseq-llm/bridge" && node bin/logseq-ai-bridge.ts agent install
+cd bridge && node bin/logseq-ai-bridge.ts agent install
 ```
 
    Expected: `agent: the bridge is running on port 47615 and will start at every
@@ -767,12 +767,70 @@ Update and restart (`agent restart` if you use the agent). The status line shoul
 
 To turn memory off: `"memoryPage": null` in config.json.
 
+### 4j. Claude Desktop and Codex
+
+These apps can read and change AI Sandbox through the bridge, under the same privacy filter
+and write checks as a cloud model in the panel. What they read goes to their cloud models,
+and the bridge can't see what they do with it afterwards, including through their other
+tools. The memory tools stay with the panel.
+
+Run these from the `bridge` folder.
+
+1. Tests:
+
+```bash
+node --test "test/**/*.test.ts"
+```
+
+Expected: `pass 106`, `fail 0`.
+
+2. Load the new build, then switch the plugin off and on. The status line should show
+   `panel 0.8.0 · bridge 0.11.1`.
+
+```bash
+cd ../plugin && npm run build && cd ../bridge && node bin/logseq-ai-bridge.ts agent restart
+```
+
+3. Quit Claude Desktop with ⌘Q, connect it, then reopen it. Do the same for Codex with
+   `connect codex`, then start a new Codex chat.
+
+```bash
+node bin/logseq-ai-bridge.ts connect claude-desktop
+```
+
+4. **Read.** With AI Sandbox open in Logseq, ask: *"Use the logseq-ai tools. What's on my AI
+   Test page?"* It should mention "Apples are red", but not "This one is secret" or "Local
+   only note". It should quote block text, with no ids like `[[a558ac4e-…]]`.
+5. **Addition.** Ask: *"Add a block to AI Test saying hello from the app."* With `autoApply`
+   on `additions` or `own`, it goes in without a click, tagged `#ai`.
+6. **Card.** Close the panel, then ask: *"Change 'Apples are red' to 'Apples are green'."*
+   The panel opens by itself, with a card above the composer titled `Claude Desktop: …`.
+   Click **Apply**, and the app reports it as applied.
+7. **Slow approval.** Ask for another edit, and wait over 25 seconds before clicking. The app
+   says the change is waiting on a card. Click **Apply**, and ask the app whether it went
+   through. There should be one change, not two.
+8. **Reject.** Ask for an edit, type a note on the card and click **Reject**. The app sees
+   your note.
+9. **No plugin.** Switch the plugin off and ask for an edit. It's refused at once. Switch
+   the plugin back on.
+10. **Audit log.** Expected: lines naming the app, and no note text.
+
+```bash
+grep -E '"client"|"client:' "$HOME/Library/Application Support/logseq-ai/audit.jsonl" | tail -n 5
+```
+
+11. To cut an app off. Its token stops working right away, and the entry leaves its config:
+
+```bash
+node bin/logseq-ai-bridge.ts disconnect claude-desktop
+```
+
 ### Which build is running?
 
-The panel's status line shows `● Connected · panel 0.7.0 · bridge 0.9.0`. If
+The panel's status line shows `● Connected · panel 0.8.0 · bridge 0.11.1`. If
 it shows no version numbers, Logseq still runs an old plugin build. Run
 `npm run build` in `plugin/`, then switch the plugin off and on. Approval cards
-need panel ≥ 0.2.0; batched edits need 0.3.0; Apply all, Abort and folding need 0.4.0; the ✎ instructions editor needs 0.5.0 and bridge 0.7.0; 🌐 web search needs 0.6.0 and bridge 0.8.0; the memory link needs 0.7.0 (memory itself is bridge 0.9.0).
+need panel ≥ 0.2.0; batched edits need 0.3.0; Apply all, Abort and folding need 0.4.0; the ✎ instructions editor needs 0.5.0 and bridge 0.7.0; 🌐 web search needs 0.6.0 and bridge 0.8.0; the memory link needs 0.7.0 (memory itself is bridge 0.9.0); cards from connected apps need 0.8.0 and bridge 0.11.0.
 
 If a write needs your approval and no up-to-date panel is open on that chat,
 the bridge doesn't wait. It tells Claude right away that nothing was changed,

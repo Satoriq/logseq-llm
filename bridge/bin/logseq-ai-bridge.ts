@@ -1,13 +1,16 @@
 #!/usr/bin/env node
+import { homedir } from 'node:os';
 import { loadOrCreateTokens, rotateTokens } from '../src/auth.ts';
 import { AuditLog } from '../src/audit.ts';
 import { BRIDGE_NAME, BRIDGE_VERSION, dataPaths, defaultDataDir, ensureDataDirs, loadConfig, MIN_NODE_MAJOR } from '../src/config.ts';
 import { buildGraph, createRuntime } from '../src/app.ts';
-import { defaultAgentDeps, runAgent } from '../src/agent.ts';
+import { BRIDGE_SCRIPT, defaultAgentDeps, runAgent } from '../src/agent.ts';
 import { checkClaude } from '../src/check-claude.ts';
 import { runDoctor } from '../src/doctor.ts';
 import { shutdown } from '../src/http/server.ts';
 import { log } from '../src/log.ts';
+import { connectClient, disconnectClient, isMcpClient, MCP_CLIENTS, readClientTokens } from '../src/mcp/clients.ts';
+import { runStdio } from '../src/mcp/stdio.ts';
 import { CLAUDE_MODELS } from '../src/providers/claude-cli.ts';
 import { isEffort } from '../src/providers/types.ts';
 
@@ -24,6 +27,10 @@ Usage:
                                                run one tool and print exactly what a model would see
   node bin/logseq-ai-bridge.ts agent install|restart|status|uninstall
                                                macOS: start the bridge at login (and after a crash)
+  node bin/logseq-ai-bridge.ts connect ${MCP_CLIENTS.join('|')}
+                                               let that app use the graph tools (privacy-filtered; writes need your approval); changes its config file
+  node bin/logseq-ai-bridge.ts disconnect ${MCP_CLIENTS.join('|')}
+                                               cut that app off at once and remove it from its config file
   node bin/logseq-ai-bridge.ts token          print the plugin token (paste it into the plugin settings)
   node bin/logseq-ai-bridge.ts rotate-token   make new tokens (the old ones stop working)
 
@@ -92,6 +99,24 @@ async function main(): Promise<void> {
   if (cmd === 'agent') {
     const ok = await runAgent(args[0] ?? '', defaultAgentDeps({ dataDir: paths.root, logDir: paths.logs, port: config.port }));
     process.exitCode = ok ? 0 : 1;
+    return;
+  }
+
+  if (cmd === 'connect' || cmd === 'disconnect') {
+    const client = args[0];
+    if (!isMcpClient(client)) throw new Error(`${cmd}: name an app: ${MCP_CLIENTS.join(' or ')}`);
+    const opts = { tokensFile: paths.mcpClients, home: homedir() };
+    const file = cmd === 'connect' ? await connectClient(client, { ...opts, node: process.execPath, script: BRIDGE_SCRIPT }) : await disconnectClient(client, opts);
+    process.stdout.write(`${cmd === 'connect' ? 'Connected' : 'Disconnected'} ${client} (changed ${file}; the old version is next to it, ending in .logseq-ai.bak).\n`);
+    process.stdout.write(cmd === 'connect' ? 'Quit and reopen the app. No bridge restart is needed.\n' : 'Its token stopped working right away.\n');
+    return;
+  }
+
+  // Started by Claude Desktop or Codex. stdout carries MCP messages only.
+  if (cmd === 'mcp') {
+    const client = args[0];
+    if (!isMcpClient(client)) throw new Error(`mcp: name an app: ${MCP_CLIENTS.join(' or ')}`);
+    await runStdio({ port: config.port, token: async () => (await readClientTokens(paths.mcpClients))[client], input: process.stdin, output: process.stdout });
     return;
   }
 

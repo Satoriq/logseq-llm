@@ -9,6 +9,7 @@ import { TurnRunner } from './chats/turns.ts';
 import type { BridgeConfig, DataPaths } from './config.ts';
 import { GraphReader } from './graph/reader.ts';
 import { createBridgeServer, listen } from './http/server.ts';
+import { APPS_CHAT_ID, readClientTokens } from './mcp/clients.ts';
 import { McpEndpoint } from './mcp/endpoint.ts';
 import { Policy } from './policy/policy.ts';
 import { parseRules } from './policy/rules.ts';
@@ -96,7 +97,8 @@ export async function createRuntime(opts: { config: BridgeConfig; paths: DataPat
   let turns: TurnRunner | undefined;
   const events = (chatId: string) => (turns as TurnRunner).eventLog(chatId);
   const approvals = new Approvals({ events });
-  const mcp = new McpEndpoint({ tools: graph.tools, audit, events, approvals });
+  await store.ensure(APPS_CHAT_ID, 'Connected apps');
+  const mcp = new McpEndpoint({ tools: graph.tools, audit, events, approvals, clients: () => readClientTokens(paths.mcpClients) });
 
   const getBlock = graph.tools.find((t) => t.name === 'get_block');
   const renderContext = async (uuids: string[], chatId: string, turnId: string): Promise<string> => {

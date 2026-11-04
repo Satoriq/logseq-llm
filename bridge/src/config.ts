@@ -4,7 +4,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { parseRule } from './policy/rules.ts';
 
 export const BRIDGE_NAME = 'logseq-ai-bridge';
-export const BRIDGE_VERSION = '0.9.0';
+export const BRIDGE_VERSION = '0.11.1';
 export const DEFAULT_PORT = 47615;
 export const MIN_NODE_MAJOR = 26;
 
@@ -68,6 +68,7 @@ export type DataPaths = {
   config: string;
   secrets: string;
   tokens: string;
+  mcpClients: string;
   chats: string;
   audit: string;
   logs: string;
@@ -94,6 +95,7 @@ export function dataPaths(root: string): DataPaths {
     config: join(root, 'config.json'),
     secrets,
     tokens: join(secrets, 'tokens.json'),
+    mcpClients: join(secrets, 'mcp-clients.json'),
     chats: join(root, 'chats'),
     audit: join(root, 'audit.jsonl'),
     logs: join(root, 'logs'),

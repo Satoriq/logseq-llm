@@ -170,9 +170,13 @@ export class BridgeClient {
 
     const runProxy = async (): Promise<void> => {
       onState({ state: 'live', mode: 'proxy' });
+      let epoch: string | null = null;
       while (!stopped) {
         const r = await this.#call<{ events: BridgeEvent[]; gap: boolean; epoch: string }>('GET', path(25), undefined, 35_000);
         backoff = 1000;
+        // A restarted bridge counts from 1 again; otherwise everything until the old seq would be skipped.
+        if (epoch !== null && r.epoch !== epoch) last = 0;
+        epoch = r.epoch;
         if (r.gap) deliver({ seq: 0, epoch: r.epoch, type: 'log.gap', ts: Date.now(), data: {} });
         for (const ev of r.events) deliver(ev);
       }

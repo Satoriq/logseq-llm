@@ -7,11 +7,16 @@ import type { Mount } from './host';
 import css from './panel.css';
 import { Panel } from './panel';
 import type { Prefs } from './panel';
-import type { Effort, EditorPort, PanelSide } from './types';
+import { APPS_CHAT_ID } from './types';
+import type { BridgeEvent, Effort, EditorPort, PanelSide } from './types';
 
 /** Plugin entry: settings, toolbar button, commands, and the panel inside Logseq's DOM. */
 
 const SIDES: PanelSide[] = ['right', 'left', 'top', 'bottom'];
+/** Connected apps' card events kept for a panel that opens later. */
+const MAX_APP_EVENTS = 300;
+/** A card younger than this opens the panel. Older ones come from the backlog. */
+const FRESH_CARD_MS = 30_000;
 
 const SETTINGS: SettingSchemaDesc[] = [
   {
@@ -137,6 +142,24 @@ export async function main(): Promise<void> {
   let mount: Mount | null = null;
   let panel: Panel | null = null;
 
+  // Cards from connected apps reach the panel whichever chat it shows. Following them all the
+  // time is also what tells the bridge a card can be seen, even with the panel closed.
+  let stopApps: (() => void) | null = null;
+  const appEvents: BridgeEvent[] = [];
+  const onAppEvent = (ev: BridgeEvent): void => {
+    if (!ev.type.startsWith('approval.')) return;
+    appEvents.push(ev);
+    if (appEvents.length > MAX_APP_EVENTS) appEvents.shift();
+    panel?.appEvent(ev);
+    // The backlog replays old cards on every start, and those shouldn't pop the panel open.
+    if (ev.type === 'approval.request' && ev.data.auto !== true && Date.now() - ev.ts < FRESH_CARD_MS) void open();
+  };
+  const watchApps = (): void => {
+    stopApps?.();
+    appEvents.length = 0;
+    stopApps = bridgeClient()?.subscribe(APPS_CHAT_ID, 0, onAppEvent, () => undefined) ?? null;
+  };
+
   const prefs = {
     get: (): Prefs => {
       const s = settings();
@@ -170,6 +193,7 @@ export async function main(): Promise<void> {
       panel = new Panel(mount.root, { doc, bridge: bridgeClient(), editor, prefs, onClose: () => close() });
       panel.setCurrentPage(await editor.currentPage().catch(() => null));
       void panel.start();
+      for (const ev of appEvents) panel.appEvent(ev);
     }
     logseq.updateSettings({ panelOpen: true });
     return panel;
@@ -186,6 +210,7 @@ export async function main(): Promise<void> {
     mount?.destroy();
     panel = null;
     mount = null;
+    watchApps();
     if (wasOpen) await open();
   };
 
@@ -229,11 +254,13 @@ export async function main(): Promise<void> {
     else if (next?.panelSide !== prev?.panelSide || next?.panelSize !== prev?.panelSize) mount?.setSide(side(), size());
   });
   logseq.beforeunload(async () => {
+    stopApps?.();
     panel?.destroy();
     mount?.destroy();
     logseq.provideStyle({ key: 'lsai-panel', style: '' });
   });
 
+  watchApps();
   if (settings().panelOpen) await open();
   console.info('[logseq-ai] ready; plugin origin =', globalThis.location.origin);
 }

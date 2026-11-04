@@ -272,7 +272,7 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
         const { view, decision } = await ctx.approve({ ...prepared.approval, graceMs, ...(auto ? { auto: true } : {}) });
         const done = (outcome: 'applied' | 'rejected' | 'failed' | 'aborted', detail: string, targetUuids: string[]): void => {
           ctx.resolved?.(view as ApprovalView, outcome, detail);
-          void deps.audit?.record({ kind: 'write', chatId: ctx.chatId ?? 'cli', ...(ctx.turnId ? { turnId: ctx.turnId } : {}), tool: name, outcome, targetUuids, locality: ctx.locality });
+          void deps.audit?.record({ kind: 'write', chatId: ctx.chatId ?? 'cli', ...(ctx.turnId ? { turnId: ctx.turnId } : {}), ...(ctx.client ? { client: ctx.client } : {}), tool: name, outcome, targetUuids, locality: ctx.locality });
         };
         if (decision.decision !== 'apply') {
           const why =

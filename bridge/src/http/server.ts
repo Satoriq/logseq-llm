@@ -9,6 +9,7 @@ import { BRIDGE_NAME, BRIDGE_VERSION } from '../config.ts';
 import { sseFrame } from '../events.ts';
 import { log } from '../log.ts';
 import { isEffort } from '../providers/types.ts';
+import { APPS_CHAT_ID } from '../mcp/clients.ts';
 import type { McpEndpoint } from '../mcp/endpoint.ts';
 import type { Approvals } from '../approvals.ts';
 import type { AuditLog } from '../audit.ts';
@@ -191,10 +192,11 @@ export function createBridgeServer(deps: ServerDeps): Server {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${actualPort()}`);
     const parts = url.pathname.split('/').filter((p) => p !== '');
 
-    // MCP endpoint for claude: its own per-process tokens, never reachable from a browser page.
+    // MCP endpoint for claude and connected apps: its own tokens, never reachable from a browser page.
     if (url.pathname === '/mcp') {
       if (origin !== undefined) throw new HttpError(403, 'no browser access to /mcp');
-      const session = deps.mcp?.sessions.find(bearerFrom(req.headers.authorization)) ?? null;
+      const token = bearerFrom(req.headers.authorization);
+      const session = deps.mcp?.sessions.find(token) ?? (await deps.mcp?.client(token)) ?? null;
       if (!deps.mcp || !session) throw new HttpError(401, 'missing or invalid token');
       if (req.method !== 'POST') {
         res.writeHead(405, { Allow: 'POST' });
@@ -293,7 +295,7 @@ export function createBridgeServer(deps: ServerDeps): Server {
       requireScope(scope, 'plugin');
       if (parts.length === 2) {
         if (method === 'GET') {
-          send(res, 200, { chats: await deps.store.list() }, cors);
+          send(res, 200, { chats: (await deps.store.list()).filter((c) => c.id !== APPS_CHAT_ID) }, cors);
           return;
         }
         if (method === 'POST') {

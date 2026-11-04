@@ -23,6 +23,8 @@ export type AuditEntry = {
   targetUuids?: string[];
   /** Web search was on for the turn (queries are not logged). */
   web?: boolean;
+  /** The connected app that made this write. */
+  client?: string;
 };
 
 export class AuditLog {

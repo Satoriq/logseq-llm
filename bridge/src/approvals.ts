@@ -167,6 +167,11 @@ export class Approvals {
     for (const [turnId, c] of this.#trusted) if (c === chatId) this.#trusted.delete(turnId);
   }
 
+  /** Ends "Apply all" for a turn with no end of its own (a connected app that went quiet). */
+  endTurn(turnId: string): void {
+    this.#trusted.delete(turnId);
+  }
+
   /** Approvals still waiting for your answer. */
   pending(chatId: string): ApprovalView[] {
     return [...this.#entries.values()].filter((e) => e.view.chatId === chatId && e.phase === 'waiting').map((e) => e.view);

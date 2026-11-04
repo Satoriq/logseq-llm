@@ -12,6 +12,8 @@ export type ToolContext = {
   signal?: AbortSignal;
   chatId?: string;
   turnId?: string;
+  /** The connected app asking, if any (for the audit log). */
+  client?: string;
   /** Shows an approval card and waits for Apply/Reject. Write tools refuse to run without it. */
   approve?: ApproveFn;
   /** Reports how an approval ended (shown on the card). */

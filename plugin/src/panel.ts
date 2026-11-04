@@ -58,6 +58,7 @@ export class Panel {
     model: HTMLSelectElement;
     effort: HTMLSelectElement;
     log: HTMLElement;
+    apps: HTMLElement;
     foot: HTMLElement;
     instrBtn: HTMLButtonElement;
     chips: HTMLElement;
@@ -77,6 +78,8 @@ export class Panel {
   #page: { uuid: string; title: string; kind: 'page' | 'block' } | null = null;
   #pinned = new Map<string, string>();
   #changes: ChangeCards;
+  /** Cards from connected apps, in their own place: they belong to no chat. */
+  #appChanges: ChangeCards;
   #destroyed = false;
   /** The open instructions editor, if any. */
   #instr: { root: HTMLElement; close: (force?: boolean) => void } | null = null;
@@ -86,6 +89,14 @@ export class Panel {
     this.#d = deps;
     this.#doc = deps.doc;
     this.#changes = new ChangeCards({ doc: deps.doc, bridge: () => this.#d.bridge, onChange: () => this.#scroll(true) });
+    this.#appChanges = new ChangeCards({
+      doc: deps.doc,
+      bridge: () => this.#d.bridge,
+      onChange: () => {
+        this.#els.apps.scrollTop = this.#els.apps.scrollHeight;
+      },
+      applyAllHint: 'Apply this and any further changes from this app, until it goes quiet for 2 minutes (10 minutes at most)',
+    });
     this.#build();
   }
 
@@ -145,6 +156,8 @@ export class Panel {
     const log = this.#h('div', 'lsai-log');
     log.setAttribute('aria-live', 'polite');
 
+    const apps = this.#h('div', 'lsai-apps');
+
     const foot = this.#h('div', 'lsai-foot');
     const chips = this.#h('div', 'lsai-chips');
     const input = this.#h('textarea', 'lsai-input');
@@ -176,8 +189,8 @@ export class Panel {
       this.root.addEventListener(type, (e) => e.stopPropagation());
     }
 
-    this.root.append(head, log, foot);
-    this.#els = { status, chatSelect, provider, model, effort, log, foot, instrBtn, chips, web, input, send, stop };
+    this.root.append(head, log, apps, foot);
+    this.#els = { status, chatSelect, provider, model, effort, log, apps, foot, instrBtn, chips, web, input, send, stop };
     this.#renderChips();
   }
 
@@ -349,6 +362,12 @@ export class Panel {
     this.#destroyed = true;
     this.#unsub?.();
     this.#changes.clear();
+    this.#appChanges.clear();
+  }
+
+  /** An approval event from a connected app (main.ts follows those, even with the panel closed). */
+  appEvent(ev: BridgeEvent): void {
+    this.#appChanges.onEvent(ev, () => this.#els.apps);
   }
 
   focus(): void {

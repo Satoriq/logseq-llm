@@ -1,5 +1,8 @@
 /** Shapes shared with the bridge's HTTP API (see bridge/src/http/server.ts). */
 
+/** The one chat that holds cards from connected apps (same id as in bridge/src/mcp/clients.ts). */
+export const APPS_CHAT_ID = '00000000-0000-4000-8000-0000000000a1';
+
 export type Effort = 'auto' | 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type Locality = 'local' | 'cloud';
 

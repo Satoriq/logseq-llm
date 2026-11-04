@@ -76,10 +76,10 @@ export class ChatStore {
     return join(this.dir, `${id}.jsonl`);
   }
 
-  async create(title?: string): Promise<ChatMeta> {
+  async create(title?: string, id: string = randomUUID()): Promise<ChatMeta> {
     const now = Date.now();
     const meta: ChatMeta = {
-      id: randomUUID(),
+      id,
       title: (title ?? '').trim().slice(0, 200) || 'New chat',
       createdAt: now,
       updatedAt: now,
@@ -87,6 +87,11 @@ export class ChatStore {
     await writeFileAtomic(this.#metaPath(meta.id), JSON.stringify(meta, null, 2) + '\n');
     this.#metaCache.set(meta.id, meta);
     return meta;
+  }
+
+  /** A chat with a fixed id, created the first time. */
+  async ensure(id: string, title: string): Promise<ChatMeta> {
+    return (await this.get(id)) ?? this.create(title, id);
   }
 
   async get(id: string): Promise<ChatMeta | null> {

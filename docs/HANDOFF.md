@@ -78,15 +78,18 @@ providers · 5 Ollama + escalation · 6 save chat · 7 D worker · 8 voice.
 | 1a bridge skeleton · 1b read tools + privacy · 1c `claude -p` + MCP | ✅ done, verified on the Mac |
 | 2 panel in Logseq's DOM | ✅ done, verified on the Mac |
 | 3 approved writes (+ auto-apply, Apply all, Abort, folding, `#ai` tag, tags) | ✅ done, verified on the Mac |
-| Extras built since: properties, your instructions, step folding, web search, login agent, memory | ✅ built and tested here; **not yet confirmed on the Mac** (see below) |
-| 4 Anthropic + OpenAI API providers | next candidate |
-| 5 Ollama + escalation + consent cards | next candidate (recommended first) |
+| Extras built since: properties, your instructions, step folding, web search, login agent, memory | ✅ built and tested here; **partly confirmed on the Mac** (see below) |
+| Claude Desktop and Codex, reads and writes | ✅ built; path through the real adapter and bridge checked against AI Sandbox; **panel dock and the apps themselves not yet confirmed** (TESTING 4j) |
+| Shared provider groundwork | **next** |
+| Real graph, read-only | after that |
+| 5 Ollama + escalation + consent cards | after that, with a small-model test first |
+| 4 Anthropic + OpenAI API providers | later |
 | 6 save chat to graph | small, any time |
 | 7 D worker (comments / #Tasks, Inbox) | later |
 | 8 voice helper | later |
 | UI polish pass (T3-Code-like) | later |
 
-**Current versions:** bridge **0.9.0**, panel **0.7.0**. The panel's status line
+**Current versions:** bridge **0.11.1**, panel **0.8.0**. The panel's status line
 shows both, which is how you tell which build is running.
 
 **Confirmed on the user's Mac:**
@@ -95,16 +98,17 @@ shows both, which is how you tell which build is running.
 - tool output correct in both the cloud and the local view;
 - `check-claude` OK;
 - in the panel: chat works, writes and auto-apply work, tags show;
-- a raw `claude --tools WebSearch` run works on the user's Mac.
+- a raw `claude --tools WebSearch` run works on the user's Mac;
+- `doctor --sample-page "AI Test"` property query (`ok`, 119 rows);
+- 🌐 web search through the bridge (one search in the audit log);
+- `agent install` (4h).
 
 **Not yet confirmed on the Mac:**
-- `doctor --sample-page "AI Test"` → `ok sample query properties` (the new property
-  queries; if they fail, every read fails, safely);
-- property reads and edits (TESTING 4e);
+- property reads and edits in real use (TESTING 4e);
 - the ✎ instructions editor (4f);
-- 🌐 web search through the bridge (4g, `check-claude --web`);
-- `agent install` (4h; the user first ran it from the wrong folder);
-- memory (4i).
+- a chat through the login agent;
+- memory (4i);
+- Claude Desktop and Codex themselves, and the panel's card dock (4j).
 
 Ask the user for these results before building on them.
 
@@ -192,6 +196,8 @@ Ask the user for these results before building on them.
     write tools print the card, then decline)
   - `token`, `rotate-token`
   - `agent install|restart|status|uninstall`
+  - `connect|disconnect claude-desktop|codex`
+  - `mcp <app>` (started by the app, not by hand)
 
 ### Graph tools (the same set for every provider)
 - **Read:**
@@ -261,11 +267,19 @@ Ask the user for these results before building on them.
     chat;
   - `all`: everything.
 
-  AI Sandbox uses `own`.
+  AI Sandbox was planned as `own`, but the Mac's config has `additions`.
 - **"Apply all"** trusts the rest of the current answer only.
 - **No hidden waiting:** if no up-to-date panel is attached to the chat, a write fails
   fast with a notice. Otherwise an unanswered card times out after 10 minutes.
 - **Memory changes always need a click**, except with Apply all or `all`.
+- **Connected apps:**
+  - Their cards go to one fixed chat (`APPS_CHAT_ID`), hidden from the picker. The plugin
+    follows it all the time and shows the cards in a dock above the composer.
+  - A card that needs a click opens the panel. With no plugin following, a write is refused
+    at once.
+  - A write answers within 25 s, with the result or with "still waiting" and an id for
+    `check_change`, because apps time out tool calls. The card stays live.
+  - Apply all lasts until the app is quiet for 2 minutes, 10 minutes at most.
 
 ### Your instructions and memory
 - **Instructions:** up to 8000 characters in `instructions.md` (mode 0600). They come
@@ -364,9 +378,13 @@ Data folder layout:
   Changes always go through a card.
 - **Web search:** search only; page opening stays off.
 - **A plugin can't start programs**, so the bridge starts at login via a LaunchAgent.
-- **Claude Desktop + MCP** (Logseq tools inside the Desktop app) was discussed and
-  **not chosen** for now. It would need a stdio connector, and Desktop's other
-  tools could leak notes.
+- **Claude Desktop and Codex connect through a stdio adapter** (`mcp <app>`) that forwards
+  to the bridge's `/mcp`. This reverses the earlier "not chosen", at the user's request.
+  - Apps count as cloud, have a token each, and get every tool except `remember` and
+    `forget`. Writes use the same checks and cards as the panel.
+  - The leak risk stands: their other tools sit next to note text, and an app with a shell
+    could run `logseq` itself and skip the filter. The filter limits what the bridge hands
+    over; it doesn't contain these apps.
 
 ## 7. Facts learned the hard way
 
@@ -419,8 +437,16 @@ Data folder layout:
 - `provideUI` HTML goes through DOMPurify, which keeps `img`. That's why the panel
   builds its DOM by hand.
 
-**macOS shell:** the BSD `grep` limits repetition counts to 255, so avoid
-`\{0,300\}`.
+**macOS:**
+- The BSD `grep` limits repetition counts to 255, so avoid `\{0,300\}`.
+- `launchctl bootout` returns before the service has unloaded. A `bootstrap` straight after
+  it fails with `Bootstrap failed: 5`, so `agent` waits for `print` to stop finding it.
+
+**Logseq's own API server:** it was listening on 127.0.0.1:12315 and serves `/mcp`, with no
+privacy filter. Never point a client at it. PLAN §6 assumed this server stays off.
+
+**Claude Code's sandbox** can block writes to the data folder and local port binding. Then
+`agent` commands fail with `EPERM`, and the HTTP tests fail with `listen EPERM`.
 
 ## 8. Repo map
 
@@ -431,7 +457,9 @@ bridge/
   src/app.ts                   wiring: graph, tools, memory, providers, server
   src/config.ts                config + data paths + versions
   src/http/server.ts           HTTP API, SSE/long-poll
-  src/mcp/endpoint.ts          MCP JSON-RPC for claude
+  src/mcp/endpoint.ts          MCP JSON-RPC for claude and connected apps
+  src/mcp/clients.ts           connected apps: tokens, connect / disconnect
+  src/mcp/stdio.ts             stdio adapter that Claude Desktop and Codex start
   src/approvals.ts             approval queue, auto/grace/abort/apply-all
   src/chats/{store,turns}.ts   transcripts, one turn at a time per chat
   src/providers/{claude-cli,echo,types}.ts
@@ -448,7 +476,7 @@ docs/PLAN.md · docs/TESTING.md · docs/HANDOFF.md (this file)
 
 ## 9. How to work on it
 
-**Bridge tests (86, all passing):**
+**Bridge tests (106):**
 
 ```bash
 cd bridge && node --test "test/**/*.test.ts"
@@ -494,11 +522,24 @@ relative to the repo.
 
 ## 10. Next steps and open questions
 
-1. **Get the Mac results** listed in §3 first, especially the doctor property sample.
-2. **Step 5, Ollama (recommended next).** It makes `#private` and `local-only` notes
-   usable.
+The user's order: shared groundwork, real graph read-only, step 5, then step 4.
+
+1. **Get the Mac results** listed in §3 first, especially 4i and 4j.
+   - **Shared groundwork, no installs:**
+     - `turns.ts` passes the raw transcript, though `types.ts` says it's filtered. Filter it
+       there, before any new provider.
+     - Move tool running out of the MCP endpoint.
+     - Pass locality to `renderContext` and memory (hard-coded `cloud` in `app.ts`).
+     - Store tool calls: only reply text is kept, so stateless providers lose block ids.
+     - Run a handoff on `--resume` too: today Claude misses a local stretch, and the
+       first handoff sends your typed messages with no card.
+   - **Real graph, read-only.** Nothing in the build order covered it. `graph` is one
+     value, and there are no deny rules yet. Set rules first, and keep `writeGraphs` as is.
+2. **Step 5, Ollama.** It makes `#private` and `local-only` notes usable.
    - **Needs approval:** installing Ollama, a model chosen by the Mac's memory, and
      `OLLAMA_NO_CLOUD=1`.
+   - **Memory:** a 24 GB M2 with the usual apps open had 103 MB free and 9 GB compressed,
+     so test a smaller model's tool calling before building consent cards.
    - **Plan (PLAN.md §4.7–4.8):**
      - Call `/api/chat` with tools and `think` (read the model's capabilities from
        `/api/show`).
@@ -527,5 +568,4 @@ relative to the repo.
 7. **UI polish pass** for the panel.
 8. **Ideas parked:**
    - WebFetch with a per-URL approval card;
-   - Logseq tools inside Claude Desktop, read-only;
    - a committed browser-test harness.
