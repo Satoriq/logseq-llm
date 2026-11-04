@@ -199,6 +199,8 @@ export class Panel {
       'Tell the AI how to work for you: language, tone and length of answers, what you do, how your notes are organized. ' +
         'Used from your next message, in every chat. Privacy rules and approvals always stay on.',
     );
+    const memory = this.#h('div', 'lsai-instr-help');
+    memory.hidden = true;
     const text = this.#h('textarea', 'lsai-input lsai-instr-text');
     text.rows = 12;
     text.spellcheck = true;
@@ -217,7 +219,7 @@ export class Panel {
     actions.append(state, close, save);
     const countRow = this.#h('div', 'lsai-instr-count');
     countRow.appendChild(count);
-    root.append(title, help, text, countRow, actions, builtIn);
+    root.append(title, help, memory, text, countRow, actions, builtIn);
 
     let saved = '';
     let max = 8000;
@@ -295,6 +297,14 @@ export class Panel {
       max = r.maxChars;
       text.value = r.text;
       builtInText.textContent = r.builtIn;
+      if (r.memoryPage) {
+        const page = r.memoryPage;
+        memory.append(
+          this.#h('span', undefined, `Memory: Claude keeps what it learns about you on the page "${page}" (you approve each change). `),
+          this.#button('lsai-linkbtn', 'Open it', `Open "${page}" in Logseq`, () => this.#d.editor.openPage(page)),
+        );
+        memory.hidden = false;
+      }
       loaded = true;
       text.disabled = false;
       state.textContent = r.updatedAt ? `Last saved ${new Date(r.updatedAt).toLocaleString()}` : '';

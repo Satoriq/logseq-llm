@@ -75,6 +75,8 @@ export type WriteToolDeps = {
   own?: OwnBlocks;
   /** Tag for AI-written blocks (default "ai"). */
   aiTag?: string;
+  /** The AI's memory page: enables remember / forget. */
+  memory?: { title: string; invalidate: () => void };
 };
 
 export type OwnBlocks = {
@@ -841,5 +843,118 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
     }),
   };
 
-  return [insertBlocks, updateBlocks, createTask, createPage, removeBlock];
+  // ---------- memory ----------
+
+  const memoryPage = async (ctx: ToolContext): Promise<GNode | null> => {
+    const title = (deps.memory as { title: string }).title;
+    const page = await deps.reader.pageByTitle(title);
+    if (page && !visibleTo(deps.policy.evaluate({ node: page, chain: [] }).visibility, ctx.locality)) {
+      throw new ToolInputError(`The memory page "${title}" is hidden by the user's privacy settings, so nothing can be saved there.`);
+    }
+    return page;
+  };
+
+  /** A memory is a block on the memory page (top level). */
+  const memoryBlock = async (uuid: string, ctx: ToolContext, page: GNode | null): Promise<GNode> => {
+    const { node } = await visibleBlock(uuid, ctx);
+    if (!page || node.pageId !== page.id || node.parentId !== page.id) {
+      throw new ToolInputError(`${uuid} isn't a memory (memories are the top-level blocks of the page "${page?.title ?? deps.memory?.title}").`);
+    }
+    return node;
+  };
+
+  const remember: ToolDef = {
+    name: 'remember',
+    kind: 'write',
+    description:
+      "Save one lasting fact or preference to the user's AI memory page, so later chats know it. One short line, phrased as a fact. " +
+      'To change an existing memory, give its id as "replaces". The user sees it on a card and approves it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'The fact, e.g. "Prefers answers in Ukrainian, short"' },
+        replaces: { type: 'string', description: 'Id of the memory this one replaces ([id:...] in the memory list)' },
+      },
+      required: ['text'],
+      additionalProperties: false,
+    },
+    label: (a) => (a.replaces ? 'updating a memory' : 'saving to memory'),
+    run: withApproval('remember', async (args, ctx, graph) => {
+      const raw = argString(args, 'text', { required: true, max: 2000 }) as string;
+      const text = raw.replace(/\s*\n\s*/g, ' ').trim();
+      if (text === '' || text.length > 500) throw new ToolInputError('a memory is one line of 1 to 500 characters');
+      const replaces = argString(args, 'replaces', { required: false, max: 64 })?.toLowerCase();
+      const warnings = await checkContent(text, ctx);
+      for (const p of await newPagesIn(text)) warnings.push(`Will create new page: ${p}`);
+      const title = (deps.memory as { title: string }).title;
+      const page = await memoryPage(ctx);
+      const old = replaces !== undefined ? await memoryBlock(replaces, ctx, page) : null;
+      // A local model's memories stay local: they get ai-access:: local-only, so no cloud model reads them.
+      let localOnly: string | null = null;
+      if (ctx.locality === 'local') {
+        const access = [...(await deps.reader.properties()).values()].find((p) => !p.builtIn && p.title.toLowerCase() === ACCESS_PROPERTY);
+        if (!access) throw new ToolInputError(`A local model's memory must be marked "${ACCESS_PROPERTY}:: local-only", but this graph has no "${ACCESS_PROPERTY}" property yet.`);
+        localOnly = `{${ednKeyword(access.ident)} ${ednString('local-only')}}`;
+        warnings.push('Saved as local-only: cloud models will not see this memory.');
+      }
+      return {
+        approval: {
+          tool: 'remember',
+          title: old ? 'Update a memory' : 'Remember',
+          target: `page "${page?.title ?? title}"${page ? '' : ' (new page)'}`,
+          body: old ? { kind: 'diffs', items: [{ before: old.title, after: text }] } : { kind: 'text', text },
+          warnings,
+        },
+        targetUuids: page?.uuid ? [page.uuid] : [],
+        ...(old?.uuid ? { ownTargets: [old.uuid.toLowerCase()] } : {}),
+        apply: async () => {
+          if (!page) {
+            // The page carries the AI tag once; its memories don't each need it.
+            const p = await run({ command: ['upsert', 'page'], graph, options: { page: title, 'update-tags': tagsEdn([aiTag]) } });
+            if (!p.ok) throw new Error(`couldn't create the memory page: ${cliMessage(p)}`);
+          }
+          const options: Record<string, string> = old
+            ? { uuid: (old.uuid as string).toLowerCase(), content: text }
+            : { 'target-page': page?.title ?? title, pos: 'last-child', content: text };
+          if (localOnly) options['update-properties'] = localOnly;
+          const r = await run({ command: ['upsert', 'block'], graph, options });
+          if (!r.ok) throw new Error(cliMessage(r));
+          deps.memory?.invalidate();
+          const uuids = old?.uuid ? [old.uuid.toLowerCase()] : await uuidsOf(resultIds(r.json));
+          return {
+            summary: `${old ? 'updated the memory' : 'saved to memory'}${uuids[0] ? ` [id:${uuids[0]}]` : ''}`,
+            short: old ? 'memory updated' : 'remembered',
+            targetUuids: uuids,
+            ...(old ? {} : { created: uuids }),
+          };
+        },
+      };
+    }),
+  };
+
+  const forget: ToolDef = {
+    name: 'forget',
+    kind: 'write',
+    description: "Remove one memory from the user's AI memory page (by its id from the memory list), e.g. when it's wrong or outdated. The user approves it.",
+    inputSchema: { type: 'object', properties: { uuid: { type: 'string' } }, required: ['uuid'], additionalProperties: false },
+    label: () => 'removing a memory',
+    run: withApproval('forget', async (args, ctx, graph) => {
+      const uuid = (argString(args, 'uuid', { required: true, max: 64 }) as string).toLowerCase();
+      const page = await memoryPage(ctx);
+      const node = await memoryBlock(uuid, ctx, page);
+      return {
+        approval: { tool: 'forget', title: 'Forget a memory', target: `page "${page?.title}"`, body: { kind: 'remove', text: `- ${node.title}` }, warnings: [] },
+        targetUuids: [uuid],
+        ownTargets: [uuid],
+        apply: async () => {
+          const r = await run({ command: ['remove', 'block'], graph, options: { uuid } });
+          if (!r.ok) throw new Error(cliMessage(r));
+          deps.memory?.invalidate();
+          return { summary: 'removed the memory', short: 'forgotten', targetUuids: [uuid] };
+        },
+      };
+    }),
+  };
+
+  return [insertBlocks, updateBlocks, createTask, createPage, removeBlock, ...(deps.memory ? [remember, forget] : [])];
 }

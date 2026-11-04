@@ -39,8 +39,8 @@ export type ClaudeCliOptions = {
   sessions: McpSessions;
   toolNames: () => string[];
   store: ChatStore;
-  /** Built-in prompt plus your instructions, read fresh for every turn. */
-  systemPrompt: () => Promise<string>;
+  /** Built-in prompt, your instructions and the memory page, read fresh for every turn. */
+  systemPrompt: (turn: { chatId: string; turnId: string }) => Promise<string>;
   /** --restricted (default true). Turn off only if your claude version rejects it. */
   restricted: boolean;
   /** Offer web search (WebSearch only, never WebFetch) when the user asks for it. */
@@ -158,7 +158,7 @@ export class ClaudeCliProvider implements Provider {
     const mcp = o.sessions.create(req.chatId, req.turnId, 'cloud');
     const mcpConfigPath = join(o.runDir, `mcp-${req.turnId}.json`);
     const systemPromptFile = join(o.runDir, `system-${req.turnId}.md`);
-    await writeFile(systemPromptFile, await o.systemPrompt(), { mode: 0o600 });
+    await writeFile(systemPromptFile, await o.systemPrompt({ chatId: req.chatId, turnId: req.turnId }), { mode: 0o600 });
     const toolNames = o.toolNames();
     const expectedTools = new Set(toolNames.map((n) => `mcp__${MCP_SERVER_NAME}__${n}`));
     if (web) expectedTools.add(WEB_TOOL);

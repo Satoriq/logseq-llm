@@ -35,6 +35,8 @@ export type ServerDeps = {
   approvals?: Approvals;
   /** Your own instructions for the AI. Optional so tests can omit it. */
   instructions?: Instructions;
+  /** Title of the AI's memory page, for the panel's link (null = memory off). */
+  memoryPage?: string | null;
   audit?: AuditLog;
 };
 
@@ -269,7 +271,7 @@ export function createBridgeServer(deps: ServerDeps): Server {
         }
       }
       const cur = await ins.get();
-      send(res, 200, { text: cur.text, updatedAt: cur.updatedAt, maxChars: MAX_INSTRUCTION_CHARS, builtIn: ins.builtIn }, cors);
+      send(res, 200, { text: cur.text, updatedAt: cur.updatedAt, maxChars: MAX_INSTRUCTION_CHARS, builtIn: ins.builtIn, memoryPage: deps.memoryPage ?? null }, cors);
       return;
     }
 

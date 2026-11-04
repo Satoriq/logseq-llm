@@ -4,7 +4,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { parseRule } from './policy/rules.ts';
 
 export const BRIDGE_NAME = 'logseq-ai-bridge';
-export const BRIDGE_VERSION = '0.8.0';
+export const BRIDGE_VERSION = '0.9.0';
 export const DEFAULT_PORT = 47615;
 export const MIN_NODE_MAJOR = 26;
 
@@ -37,6 +37,8 @@ export type BridgeConfig = {
   autoApply: Record<string, AutoApplyMode>;
   /** Tag put on the top block of whatever the AI writes. Created automatically in writable graphs. */
   aiTag: string;
+  /** Page the AI keeps its memory on (read every turn; changed only with your approval). null = no memory. */
+  memoryPage: string | null;
   /**
    * What reads show of block properties unless the model asks for them (properties:true):
    *   names   "(props: priority, deadline)" on blocks that have any (default)
@@ -115,6 +117,7 @@ export function defaultConfig(): BridgeConfig {
     writeGraphs: [],
     autoApply: {},
     aiTag: 'ai',
+    memoryPage: 'AI Memory',
     readProperties: 'names',
     cliTimeoutMs: 15000,
     cliConcurrency: 2,
@@ -193,6 +196,13 @@ export function mergeConfig(base: BridgeConfig, raw: unknown): BridgeConfig {
     const t = input.aiTag;
     if (typeof t !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_\-/]{0,59}$/.test(t)) throw new Error('config.json: "aiTag" must be a tag name like "ai" (letters, digits, - _ /)');
     out.aiTag = t;
+  }
+  if (input.memoryPage !== undefined) {
+    const m = input.memoryPage;
+    if (m !== null && (typeof m !== 'string' || !/^[^\n\r[\]#]{1,120}$/.test(m) || m.trim() !== m)) {
+      throw new Error('config.json: "memoryPage" must be a page title like "AI Memory", or null to turn memory off');
+    }
+    out.memoryPage = m as string | null;
   }
   if (input.readProperties !== undefined) {
     if (!READ_PROPERTY_MODES.includes(input.readProperties as ReadPropertiesMode)) throw new Error('config.json: "readProperties" must be "names", "values" or "off"');

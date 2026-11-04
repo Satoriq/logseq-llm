@@ -17,6 +17,7 @@ import { EchoProvider } from './providers/echo.ts';
 import { LogseqCli } from './tools/cli.ts';
 import { GraphGuard, readTools } from './tools/read.ts';
 import { Instructions } from './instructions.ts';
+import { MemoryPage, memorySection } from './memory.ts';
 import type { ToolDef } from './tools/registry.ts';
 import { writeTools } from './tools/write.ts';
 import type { OwnBlocks } from './tools/write.ts';
@@ -28,6 +29,8 @@ export type Graph = {
   policy: Policy;
   guard: GraphGuard;
   tools: ToolDef[];
+  /** The AI's memory page (config "memoryPage"); absent = no memory. */
+  memory?: MemoryPage;
 };
 
 /** With `paths`, the write tools are included too (they need the run dir and the audit log). */
@@ -38,6 +41,10 @@ export function buildGraph(config: BridgeConfig, paths?: DataPaths, own?: OwnBlo
   const guard = new GraphGuard({ graph: config.graph, serverList: () => cli.serverList() });
   const ensureGraph = (): Promise<void> => guard.ensure();
   const tools = readTools({ reader, policy, ensureGraph, propertyMode: config.readProperties });
+  const getPage = tools.find((t) => t.name === 'get_page') as ToolDef;
+  const memory = config.memoryPage
+    ? new MemoryPage({ title: config.memoryPage, read: (locality) => getPage.run({ title: config.memoryPage as string, depth: 2 }, { locality }) })
+    : undefined;
   if (paths) {
     tools.push(
       ...writeTools({
@@ -52,10 +59,11 @@ export function buildGraph(config: BridgeConfig, paths?: DataPaths, own?: OwnBlo
         autoApply: config.graph !== null ? (config.autoApply[config.graph] ?? 'none') : 'none',
         aiTag: config.aiTag,
         ...(own ? { own } : {}),
+        ...(memory ? { memory } : {}),
       }),
     );
   }
-  return { cli, reader, policy, guard, tools };
+  return { cli, reader, policy, guard, tools, ...(memory ? { memory } : {}) };
 }
 
 export type Runtime = {
@@ -117,7 +125,14 @@ export async function createRuntime(opts: { config: BridgeConfig; paths: DataPat
     sessions: mcp.sessions,
     toolNames: () => mcp.toolNames(),
     store,
-    systemPrompt: () => instructions.systemPrompt(),
+    systemPrompt: async ({ chatId, turnId }) => {
+      if (!graph.memory) return instructions.systemPrompt();
+      const view = await graph.memory.view('cloud');
+      if (view.sentUuids.length > 0) {
+        await audit.record({ kind: 'tool', chatId, turnId, tool: 'memory', locality: 'cloud', sentUuids: view.sentUuids, hiddenCount: view.hiddenCount });
+      }
+      return instructions.systemPrompt(memorySection(graph.memory.title, view));
+    },
     restricted: config.claudeRestricted,
     webSearch: config.webSearch,
     renderContext,
@@ -131,7 +146,7 @@ export async function createRuntime(opts: { config: BridgeConfig; paths: DataPat
     // A cancelled or finished turn can't apply anything any more.
     onSettled: (chatId) => approvals.rejectAll(chatId, 'cancelled'),
   });
-  const server = createBridgeServer({ port, allowedOrigins: config.allowedOrigins, tokens, store, turns, mcp, approvals, instructions, audit });
+  const server = createBridgeServer({ port, allowedOrigins: config.allowedOrigins, tokens, store, turns, mcp, approvals, instructions, audit, memoryPage: graph.memory?.title ?? null });
   return {
     server,
     turns,

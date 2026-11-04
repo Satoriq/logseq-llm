@@ -22,17 +22,19 @@ export function cleanInstructions(raw: unknown): string {
   return text;
 }
 
-/** The built-in prompt plus your instructions, as claude gets it. */
-export function systemPromptWith(base: string, user: string): string {
-  if (user.trim() === '') return base;
-  // Your text can't close the block early and look like a rule after it.
-  const safe = user.replace(/<\/?\s*user_instructions\s*>/gi, (m) => m.replace('<', '‹').replace('>', '›'));
-  return (
-    `${base.trimEnd()}\n\n` +
-    "The user's own instructions follow. Follow them: they take precedence over the working and style guidance above " +
-    '(language, length, tone, format, how to use the notes), but not over the privacy, approval and safety rules.\n' +
-    `<user_instructions>\n${safe}\n</user_instructions>\n`
-  );
+/** The built-in prompt, then your instructions, then the memory section (memory.ts), as claude gets it. */
+export function systemPromptWith(base: string, user: string, memory = ''): string {
+  let out = base;
+  if (user.trim() !== '') {
+    // Your text can't close the block early and look like a rule after it.
+    const safe = user.replace(/<\/?\s*user_instructions\s*>/gi, (m) => m.replace('<', '‹').replace('>', '›'));
+    out =
+      `${out.trimEnd()}\n\n` +
+      "The user's own instructions follow. Follow them: they take precedence over the working and style guidance above " +
+      '(language, length, tone, format, how to use the notes), but not over the privacy, approval and safety rules.\n' +
+      `<user_instructions>\n${safe}\n</user_instructions>\n`;
+  }
+  return memory === '' ? out : `${out.trimEnd()}\n\n${memory}`;
 }
 
 export class Instructions {
@@ -68,8 +70,8 @@ export class Instructions {
     return this.get();
   }
 
-  /** What a turn sends as the system prompt. */
-  async systemPrompt(): Promise<string> {
-    return systemPromptWith(this.builtIn, (await this.get()).text);
+  /** What a turn sends as the system prompt (plus the memory section, if any). */
+  async systemPrompt(memory = ''): Promise<string> {
+    return systemPromptWith(this.builtIn, (await this.get()).text, memory);
   }
 }

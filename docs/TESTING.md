@@ -745,12 +745,34 @@ node bin/logseq-ai-bridge.ts agent status
 node bin/logseq-ai-bridge.ts agent uninstall
 ```
 
+### 4i. Memory
+
+Update and restart (`agent restart` if you use the agent). The status line should show
+`panel 0.7.0 · bridge 0.9.0`.
+
+1. Tell Claude something lasting: *"I write product docs; my projects are pages
+   tagged #project. Please remember that."* After answering, it proposes a card
+   titled **Remember** with one line. Approve it. The page "AI Memory" now exists
+   (tagged `#ai`) with that block.
+2. Start a **new chat** and ask *"What do you know about how I organize my
+   notes?"* It answers from the memory without searching.
+3. Correct it: *"Actually projects are tagged #proj now."* You get **Update a memory**
+   (before → after), not a second memory.
+4. *"Forget that."* gives you **Forget a memory**.
+5. Edit "AI Memory" in Logseq yourself (add, change, delete blocks). Claude sees your
+   version within 15 s. ✎ → "Open it" jumps to the page.
+6. Memory cards always wait for a click in AI Sandbox too (`own` mode), unless you
+   pressed "Apply all" for that answer.
+7. Privacy: tag one memory block `#private`. New chats with Claude no longer see it.
+
+To turn memory off: `"memoryPage": null` in config.json.
+
 ### Which build is running?
 
-The panel's status line shows `● Connected · panel 0.6.0 · bridge 0.8.0`. If
+The panel's status line shows `● Connected · panel 0.7.0 · bridge 0.9.0`. If
 it shows no version numbers, Logseq still runs an old plugin build. Run
 `npm run build` in `plugin/`, then switch the plugin off and on. Approval cards
-need panel ≥ 0.2.0; batched edits need 0.3.0; Apply all, Abort and folding need 0.4.0; the ✎ instructions editor needs 0.5.0 and bridge 0.7.0; 🌐 web search needs 0.6.0 and bridge 0.8.0.
+need panel ≥ 0.2.0; batched edits need 0.3.0; Apply all, Abort and folding need 0.4.0; the ✎ instructions editor needs 0.5.0 and bridge 0.7.0; 🌐 web search needs 0.6.0 and bridge 0.8.0; the memory link needs 0.7.0 (memory itself is bridge 0.9.0).
 
 If a write needs your approval and no up-to-date panel is open on that chat,
 the bridge doesn't wait. It tells Claude right away that nothing was changed,

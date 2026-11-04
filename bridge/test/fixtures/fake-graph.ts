@@ -372,6 +372,18 @@ export class FakeLogseq {
         }
         return this.#ok({ result: ids });
       }
+      if (cmd === 'upsert block' && o['target-page'] && o.content !== undefined && !o['blocks-file']) {
+        const pageE = this.#pageByTitle(String(o['target-page']));
+        if (!pageE) return { ok: false, exitCode: 1, json: { status: 'error', error: { code: 'page-not-found', message: 'page not found' } }, stdout: '', stderr: '', durationMs: 1 };
+        const e = this.#new({ title: String(o.content), page: pageE.id, parent: pageE.id, order: `z${this.#nextId}`, tags });
+        for (const [k, v] of o['update-properties'] === undefined ? [] : (parseEdn(String(o['update-properties'])) as [string, unknown][])) {
+          const prop = this.#propertyByIdent(k.replace(/^:/, ''));
+          if (!prop) continue;
+          const vb = this.#new({ title: String(v), page: pageE.id, parent: e.id, order: 'v', createdFromProperty: prop.id });
+          e.props = { ...(e.props ?? {}), [prop.ident as string]: vb.id };
+        }
+        return this.#ok({ result: [e.id] });
+      }
       if (cmd === 'upsert block' && o.uuid) {
         const e = all.find((x) => x.uuid === o.uuid);
         if (!e) return { ok: false, exitCode: 1, json: null, stdout: '', stderr: 'not found', durationMs: 1 };

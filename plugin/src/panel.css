@@ -290,3 +290,4 @@ html.is-mac #lsai-panel.lsai-side-left .lsai-head { padding-top: 40px; }
 #lsai-panel .lsai-web { font-size: 15px; filter: grayscale(1); opacity: .5; }
 #lsai-panel .lsai-web:hover { opacity: .8; }
 #lsai-panel .lsai-web.lsai-on { filter: none; opacity: 1; }
+#lsai-panel .lsai-linkbtn { font: inherit; font-size: inherit; color: var(--lsai-link); background: none; border: none; padding: 0; cursor: pointer; text-decoration: underline; }
