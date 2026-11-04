@@ -35,6 +35,9 @@ export type TurnRequest = {
   emit: (ev: ProviderEvent) => void;
 };
 
+/** Who a prompt or a context block is being put together for. */
+export type TurnInfo = { chatId: string; turnId: string; locality: Locality };
+
 export type TurnResult = {
   stopReason: 'end' | 'cancelled' | 'error';
   usage?: Record<string, number>;

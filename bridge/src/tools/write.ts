@@ -3,6 +3,7 @@ import { unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ApprovalRequest, ApprovalView } from '../approvals.ts';
 import type { AutoApplyMode } from '../config.ts';
+import type { AutoApprove } from '../settings.ts';
 import type { AuditLog } from '../audit.ts';
 import { chainOf, formatDateTime, formatJournalDay, isPage, resultItems } from '../graph/entity.ts';
 import type { GNode, PropEntry, PropertyInfo } from '../graph/entity.ts';
@@ -71,6 +72,8 @@ export type WriteToolDeps = {
   audit?: AuditLog;
   /** This graph's autoApply setting (default none). */
   autoApply?: AutoApplyMode;
+  /** The panel's Auto-approve boxes for this graph. When saved, they replace autoApply. */
+  autoApprove?: () => Promise<AutoApprove | null>;
   /** What the AI created in each chat (for autoApply "own"). */
   own?: OwnBlocks;
   /** Tag for AI-written blocks (default "ai"). */
@@ -257,10 +260,14 @@ export function writeTools(deps: WriteToolDeps): ToolDef[] {
       const graph = writable();
       await ensureTag(graph);
       const prepared = await prepare(args, ctx, graph);
-      const mode = deps.autoApply ?? 'none';
+      const boxes = (await deps.autoApprove?.()) ?? null;
+      const mode = boxes ? 'none' : (deps.autoApply ?? 'none');
       const clean = prepared.approval.warnings.length === 0;
       // Additions skip the card only when it would show no warnings (links, images, new pages, hidden refs).
       let auto = mode === 'all' || ((mode === 'additions' || mode === 'own') && ADDITIONS.has(name) && clean);
+      // The boxes cover blocks, tasks and pages, never memory, and a warning always gets the card.
+      const box = ADDITIONS.has(name) ? 'writes' : name === 'update_blocks' ? 'edits' : name === 'remove_block' ? 'deletes' : null;
+      if (boxes && box && boxes[box] && clean) auto = true;
       // "own": edits/deletes skip it too, if every block they touch was added by the AI in this chat.
       if (!auto && mode === 'own' && clean && ctx.chatId && deps.own && prepared.ownTargets && prepared.ownTargets.length > 0) {
         const mine = await deps.own.list(ctx.chatId);

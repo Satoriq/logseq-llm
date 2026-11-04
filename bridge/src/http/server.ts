@@ -11,6 +11,8 @@ import { log } from '../log.ts';
 import { isEffort } from '../providers/types.ts';
 import { APPS_CHAT_ID } from '../mcp/clients.ts';
 import type { McpEndpoint } from '../mcp/endpoint.ts';
+import { SettingsError } from '../settings.ts';
+import type { Settings } from '../settings.ts';
 import type { Approvals } from '../approvals.ts';
 import type { AuditLog } from '../audit.ts';
 import { InstructionsError, MAX_INSTRUCTION_CHARS } from '../instructions.ts';
@@ -36,6 +38,10 @@ export type ServerDeps = {
   approvals?: Approvals;
   /** Your own instructions for the AI. Optional so tests can omit it. */
   instructions?: Instructions;
+  /** Settings from the panel. Optional so tests can omit it. */
+  settings?: Settings;
+  /** The AI can write to the configured graph at all. */
+  writable?: boolean;
   /** Title of the AI's memory page, for the panel's link (null = memory off). */
   memoryPage?: string | null;
   audit?: AuditLog;
@@ -251,9 +257,29 @@ export function createBridgeServer(deps: ServerDeps): Server {
       requireScope(scope, 'plugin');
       const list = [];
       for (const p of deps.turns.providers()) {
-        list.push({ id: p.id, label: p.label, locality: p.locality, webSearch: p.webSearch === true, models: await p.models() });
+        const models = await p.models();
+        // Ollama not running: nothing to pick, so it isn't offered.
+        if (models.length > 0) list.push({ id: p.id, label: p.label, locality: p.locality, webSearch: p.webSearch === true, models });
       }
       send(res, 200, { providers: list }, cors);
+      return;
+    }
+
+    if (a === 'settings' && parts.length === 2 && (method === 'GET' || method === 'POST')) {
+      requireScope(scope, 'plugin');
+      const st = deps.settings;
+      if (!st) throw new HttpError(404, 'not found');
+      if (method === 'POST') {
+        const body = await readJson(req);
+        try {
+          const v = await st.setAutoApprove(body.autoApprove);
+          void deps.audit?.record({ kind: 'settings', chatId: 'bridge', tool: 'autoApprove', outcome: `writes=${v.writes} edits=${v.edits} deletes=${v.deletes}` });
+        } catch (err) {
+          if (err instanceof SettingsError) throw new HttpError(400, err.message);
+          throw err;
+        }
+      }
+      send(res, 200, { graph: st.graph, writable: deps.writable === true, autoApprove: await st.autoApprove() }, cors);
       return;
     }
 
@@ -388,6 +414,8 @@ export function createBridgeServer(deps: ServerDeps): Server {
     });
     const { events: backlog, gap } = log_.since(after);
     res.write(`retry: 2000\n\n`);
+    // A panel that was following the previous bridge sees the new epoch here, even in a quiet chat.
+    res.write(sseFrame({ seq: 0, epoch: log_.epoch, type: 'log.hello', ts: Date.now(), data: {} }));
     if (gap) res.write(`data: ${JSON.stringify({ type: 'log.gap', epoch: log_.epoch, seq: 0 })}\n\n`);
     for (const ev of backlog) res.write(sseFrame(ev));
     const unsubscribe = log_.subscribe((ev) => {

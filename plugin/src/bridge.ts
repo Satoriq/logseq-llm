@@ -1,4 +1,4 @@
-import type { BridgeEvent, ChatMeta, ChatState, Effort, InstructionsState, ProviderInfo } from './types';
+import type { AutoApprove, BridgeEvent, ChatMeta, ChatState, Effort, InstructionsState, ProviderInfo, SettingsState } from './types';
 
 /**
  * Client for the local bridge.
@@ -121,6 +121,14 @@ export class BridgeClient {
     return this.#call('POST', '/v1/instructions', { text });
   }
 
+  settings(): Promise<SettingsState> {
+    return this.#call('GET', '/v1/settings');
+  }
+
+  saveAutoApprove(autoApprove: AutoApprove): Promise<SettingsState> {
+    return this.#call('POST', '/v1/settings', { autoApprove });
+  }
+
   cancel(id: string): Promise<{ cancelled: boolean }> {
     return this.#call('POST', `/v1/chats/${encodeURIComponent(id)}/cancel`, {});
   }
@@ -175,7 +183,10 @@ export class BridgeClient {
         const r = await this.#call<{ events: BridgeEvent[]; gap: boolean; epoch: string }>('GET', path(25), undefined, 35_000);
         backoff = 1000;
         // A restarted bridge counts from 1 again; otherwise everything until the old seq would be skipped.
-        if (epoch !== null && r.epoch !== epoch) last = 0;
+        if (epoch !== null && r.epoch !== epoch) {
+          last = 0;
+          deliver({ seq: 0, epoch: r.epoch, type: 'log.gap', ts: Date.now(), data: {} });
+        }
         epoch = r.epoch;
         if (r.gap) deliver({ seq: 0, epoch: r.epoch, type: 'log.gap', ts: Date.now(), data: {} });
         for (const ev of r.events) deliver(ev);

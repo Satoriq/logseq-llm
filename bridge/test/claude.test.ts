@@ -203,14 +203,22 @@ test('page/selection context is filtered before it reaches claude', async () => 
   assert.match(prompt, /what is this\?$/);
 });
 
-test('switching from a local provider hands over your messages, not local replies', async () => {
+test('a local stretch stays local: neither your messages nor the replies reach Claude', async () => {
   const chat = await rt.store.create('t7');
-  await turn(chat.id, 'my first question', { provider: 'echo' });
-  await turn(chat.id, 'now with claude');
+  await turn(chat.id, 'my private question', { provider: 'echo' });
+  const events = await turn(chat.id, 'now with claude');
   const prompt = await fakeFile('fake-claude-prompt.txt');
-  assert.match(prompt, /User: my first question/);
-  assert.ok(!prompt.includes('You said:'), 'echo (local) reply stays local');
+  assert.ok(!prompt.includes('my private question'));
+  assert.ok(!prompt.includes('You said:'));
   assert.match(prompt, /now with claude$/);
+  assert.ok(events.some((e) => e.type === 'notice' && /stays on this Mac/.test(String(e.data.message))), 'you are told');
+
+  // The same when Claude comes back to a chat it already knows.
+  await turn(chat.id, 'another private one', { provider: 'echo' });
+  await turn(chat.id, 'claude again');
+  const again = await fakeFile('fake-claude-prompt.txt');
+  assert.ok(!again.includes('another private one'));
+  assert.match(again, /claude again$/);
 });
 
 test('the audit log records what went to claude, by id only', async () => {

@@ -57,6 +57,10 @@ export type ApprovalView = {
   graceMs?: number;
 };
 
+/** Which changes skip the card, for the graph the bridge uses (see bridge/src/settings.ts). */
+export type AutoApprove = { writes: boolean; edits: boolean; deletes: boolean };
+export type SettingsState = { graph: string | null; writable: boolean; autoApprove: AutoApprove };
+
 /** Your own instructions for the AI, kept by the bridge. `builtIn` is the fixed part, shown read-only. */
 export type InstructionsState = { text: string; updatedAt: number | null; maxChars: number; builtIn: string; memoryPage?: string | null };
 

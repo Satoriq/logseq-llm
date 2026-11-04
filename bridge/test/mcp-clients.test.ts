@@ -11,6 +11,7 @@ import type { DataPaths } from '../src/config.ts';
 import { EventLog } from '../src/events.ts';
 import { APPS_CHAT_ID, clientConfigPath, connectClient, disconnectClient, readClientTokens } from '../src/mcp/clients.ts';
 import { McpEndpoint } from '../src/mcp/endpoint.ts';
+import { ToolRunner } from '../src/tools/runner.ts';
 import { NOT_CONNECTED, runStdio } from '../src/mcp/stdio.ts';
 import { cardTool, clientRuntime } from './fixtures/client-runtime.ts';
 
@@ -76,7 +77,8 @@ function endpoint(opts: { appWaitMs?: number; appTurnIdleMs?: number }) {
   };
   const approvals = new Approvals({ events });
   approvals.uiAttach(APPS_CHAT_ID);
-  const mcp = new McpEndpoint({ tools: [cardTool], audit: new AuditLog(join(home, 'endpoint-audit.jsonl')), events, approvals, ...opts });
+  const runner = new ToolRunner({ tools: [cardTool], audit: new AuditLog(join(home, 'endpoint-audit.jsonl')), events, approvals });
+  const mcp = new McpEndpoint({ runner, ...opts });
   const cards = (): any[] => events(APPS_CHAT_ID).since(0).events.filter((e) => e.type === 'approval.request').map((e) => e.data);
   const waitForCard = async (n: number): Promise<any> => {
     while (cards().length < n) await new Promise((r) => setTimeout(r, 2));

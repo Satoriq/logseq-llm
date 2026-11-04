@@ -181,7 +181,11 @@ test('end to end: create chat, stream an echo turn over SSE, transcript stored',
     body: { text: 'hello there', provider: 'echo', effort: 'auto', context: { blockUuids: ['6F9619FF-8B86-D011-B42D-00C04FC964FF'] } },
   });
   assert.equal(sent.status, 202, sent.body);
-  const events = await streamed;
+  // The first frame gives the bridge's epoch, so a panel notices a restart even in a quiet chat.
+  const [hello, ...events] = await streamed;
+  assert.equal(hello.type, 'log.hello');
+  assert.equal(hello.epoch, created.json.epoch ?? hello.epoch);
+  assert.ok(hello.epoch);
   const types = events.map((e) => e.type);
   assert.equal(types[0], 'turn.start');
   assert.equal(types.at(-1), 'turn.end');

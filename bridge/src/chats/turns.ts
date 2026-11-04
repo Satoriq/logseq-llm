@@ -3,6 +3,7 @@ import type { AuditLog } from '../audit.ts';
 import { EventLog } from '../events.ts';
 import { log } from '../log.ts';
 import type { Effort, Provider, ProviderEvent } from '../providers/types.ts';
+import { transcriptFor } from './store.ts';
 import type { ChatStore } from './store.ts';
 
 export type StartTurnInput = {
@@ -93,7 +94,7 @@ export class TurnRunner {
       await this.#store.append(chatId, {
         role: 'user',
         parts: [{ type: 'text', text: input.text }],
-        meta: { turnId, contextUuids: input.contextUuids, ...(web ? { web: true } : {}) },
+        meta: { turnId, locality: provider.locality, contextUuids: input.contextUuids, ...(web ? { web: true } : {}) },
       });
       await this.#store.update(chatId, { provider: provider.id, model: model.id, effort: input.effort });
     } catch (err) {
@@ -144,7 +145,11 @@ export class TurnRunner {
     let stopReason = 'error';
     let usage: Record<string, number> | undefined;
     try {
-      const messages = await this.#store.messages(chatId);
+      const all = await this.#store.messages(chatId);
+      const messages = transcriptFor(all, provider.locality);
+      if (provider.locality === 'cloud' && all.at(-2)?.meta?.locality === 'local') {
+        events.append('notice', { message: `${provider.label} can't see what you said to the local model. That part of the chat stays on this Mac.` }, turnId);
+      }
       const emit = (ev: ProviderEvent): void => {
         if (controller.signal.aborted) return;
         if (ev.type === 'text.delta') text += ev.text;

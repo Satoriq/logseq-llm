@@ -38,6 +38,15 @@ export type StoredMessage = {
   meta?: MessageMeta;
 };
 
+/**
+ * What a provider may see of a chat. A cloud model gets only what was already said to a cloud
+ * model. Replies from local models stay local, and so do your messages to them: they can quote
+ * private notes, and no filter can redact what you typed. Anything unlabeled counts as local.
+ */
+export function transcriptFor(messages: StoredMessage[], locality: Locality): StoredMessage[] {
+  return locality === 'local' ? messages : messages.filter((m) => m.meta?.locality === 'cloud');
+}
+
 export type ChatMeta = {
   id: string;
   title: string;

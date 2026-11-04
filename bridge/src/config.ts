@@ -4,7 +4,10 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { parseRule } from './policy/rules.ts';
 
 export const BRIDGE_NAME = 'logseq-ai-bridge';
-export const BRIDGE_VERSION = '0.11.1';
+export const BRIDGE_VERSION = '0.14.0';
+
+/** The API providers (src/providers/api.ts). Here so a typo in apiModels stops the bridge. */
+export const API_PROVIDER_IDS = ['anthropic', 'openai', 'gemini', 'xai', 'deepseek', 'mistral', 'openrouter'];
 export const DEFAULT_PORT = 47615;
 export const MIN_NODE_MAJOR = 26;
 
@@ -33,6 +36,7 @@ export type BridgeConfig = {
    *   additions  new blocks/tasks/pages go in directly, but only when the card would show no warnings
    *   own        additions, plus edits/deletes of blocks the AI itself added in the same chat (no warnings)
    *   all        everything goes in directly (still checked and logged)
+   * Settings → Auto-approve in the panel replaces this for a graph once you save it there.
    */
   autoApply: Record<string, AutoApplyMode>;
   /** Tag put on the top block of whatever the AI writes. Created automatically in writable graphs. */
@@ -55,6 +59,12 @@ export type BridgeConfig = {
    * Only searching: claude can't open pages (WebFetch stays off). Default true; false hides the button.
    */
   webSearch: boolean;
+  /** Ollama on this Mac: http://127.0.0.1:<port> only, so a local model can't turn into a remote one. */
+  ollamaUrl: string;
+  /** Context size sent with every request to Ollama, in tokens. */
+  ollamaContext: number;
+  /** Extra model ids per API provider, for models newer than the built-in list. */
+  apiModels: Record<string, string[]>;
   policy: PolicyConfig;
 };
 
@@ -77,6 +87,7 @@ export type DataPaths = {
   doctor: string;
   /** Your own instructions for the AI (edited in the panel). */
   instructions: string;
+  settings: string;
 };
 
 export function defaultDataDir(): string {
@@ -103,6 +114,7 @@ export function dataPaths(root: string): DataPaths {
     claudeCwd: join(root, 'claude-cwd'),
     doctor: join(root, 'doctor'),
     instructions: join(root, 'instructions.md'),
+    settings: join(root, 'settings.json'),
   };
 }
 
@@ -125,6 +137,9 @@ export function defaultConfig(): BridgeConfig {
     cliConcurrency: 2,
     claudeRestricted: true,
     webSearch: true,
+    ollamaUrl: 'http://127.0.0.1:11434',
+    ollamaContext: 32768,
+    apiModels: {},
     policy: { deny: [], allow: [] },
   };
 }
@@ -231,6 +246,28 @@ export function mergeConfig(base: BridgeConfig, raw: unknown): BridgeConfig {
   if (input.webSearch !== undefined) {
     if (typeof input.webSearch !== 'boolean') throw new Error('config.json: "webSearch" must be true or false');
     out.webSearch = input.webSearch;
+  }
+  if (input.ollamaUrl !== undefined) {
+    if (typeof input.ollamaUrl !== 'string' || !/^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(input.ollamaUrl)) {
+      throw new Error('config.json: "ollamaUrl" must look like http://127.0.0.1:11434 (this Mac only)');
+    }
+    out.ollamaUrl = input.ollamaUrl;
+  }
+  if (input.ollamaContext !== undefined) {
+    const n = input.ollamaContext;
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 8192 || n > 262144) {
+      throw new Error('config.json: "ollamaContext" must be a whole number from 8192 to 262144');
+    }
+    out.ollamaContext = n;
+  }
+  if (input.apiModels !== undefined) {
+    const a = input.apiModels;
+    if (a === null || typeof a !== 'object' || Array.isArray(a)) throw new Error('config.json: "apiModels" must map a provider to a list of model ids');
+    for (const [provider, ids] of Object.entries(a as Record<string, unknown>)) {
+      if (!API_PROVIDER_IDS.includes(provider)) throw new Error(`config.json: unknown provider "${provider}" in "apiModels"`);
+      if (!isStringArray(ids) || !ids.every((id) => /^[\w.:/-]{1,100}$/.test(id))) throw new Error(`config.json: "apiModels.${provider}" must be a list of model ids`);
+    }
+    out.apiModels = a as Record<string, string[]>;
   }
   if (input.claudeRestricted !== undefined) {
     if (typeof input.claudeRestricted !== 'boolean') throw new Error('config.json: "claudeRestricted" must be true or false');

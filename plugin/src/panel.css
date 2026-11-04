@@ -214,8 +214,17 @@ html.is-mac #lsai-panel.lsai-side-left .lsai-head { padding-top: 40px; }
 #lsai-panel .lsai-card-failed .lsai-card-status { color: var(--lsai-bad); }
 #lsai-panel .lsai-card-rejected { opacity: .75; border-left-color: var(--lsai-border); }
 
+#lsai-panel .lsai-modal-wrap { position: absolute; inset: 0; z-index: 20; display: flex; align-items: flex-start; justify-content: center; padding: 56px 16px 16px; background: rgba(0, 0, 0, .35); }
+#lsai-panel .lsai-modal { width: 100%; max-width: 360px; max-height: 100%; overflow-y: auto; background: var(--lsai-bg); border: 1px solid var(--lsai-border); border-radius: 8px; padding: 10px 14px 14px; box-shadow: 0 8px 24px rgba(0, 0, 0, .25); outline: none; }
+#lsai-panel .lsai-modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+#lsai-panel .lsai-setting { display: flex; flex-direction: column; gap: 6px; }
+#lsai-panel .lsai-setting-title { font-weight: 600; font-size: 13px; }
+#lsai-panel .lsai-check { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+#lsai-panel .lsai-check input { margin-top: 4px; }
+#lsai-panel .lsai-check > span { display: flex; flex-direction: column; font-size: 13px; line-height: 1.35; }
 #lsai-panel .lsai-apps { flex: 0 1 auto; max-height: 50%; overflow-y: auto; padding: 0 12px; border-top: 1px solid var(--lsai-border); }
 #lsai-panel .lsai-apps:empty { display: none; }
+#lsai-panel .lsai-apps::before { content: 'From connected apps'; display: block; padding-top: 6px; font-size: 11.5px; color: var(--lsai-fg2); }
 #lsai-panel .lsai-foot { border-top: 1px solid var(--lsai-border); padding: 8px 12px 10px; display: flex; flex-direction: column; gap: 6px; }
 #lsai-panel .lsai-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 #lsai-panel .lsai-chips:empty { display: none; }

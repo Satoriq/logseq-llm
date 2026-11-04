@@ -3,7 +3,7 @@ import type { BridgeClient, ConnState } from './bridge';
 import { ChangeCards, COLLAPSE_MS } from './changes';
 import { renderMarkdown } from './render';
 import { PANEL_VERSION } from './version';
-import type { BridgeEvent, ChatMeta, Effort, EditorPort, ProviderInfo, StoredMessage } from './types';
+import type { AutoApprove, BridgeEvent, ChatMeta, EditorPort, Effort, ProviderInfo, SettingsState, StoredMessage } from './types';
 
 /**
  * The chat panel UI. Built with createElement/textContent only (see render.ts for the rules).
@@ -47,6 +47,9 @@ type Live = {
   stepRows: Map<string, HTMLElement>;
 };
 
+/** How long a finished card from a connected app stays in view. */
+const APP_CARD_KEPT_MS = 8000;
+
 export class Panel {
   readonly root: HTMLElement;
   #d: PanelDeps;
@@ -81,6 +84,8 @@ export class Panel {
   /** Cards from connected apps, in their own place: they belong to no chat. */
   #appChanges: ChangeCards;
   #destroyed = false;
+  /** Closes the open settings window, if any. */
+  #closeSettings: (() => void) | null = null;
   /** The open instructions editor, if any. */
   #instr: { root: HTMLElement; close: (force?: boolean) => void } | null = null;
 
@@ -131,6 +136,7 @@ export class Panel {
       chatSelect,
       this.#button('lsai-icon', '＋', 'New chat', () => void this.#selectChat(null)),
       instrBtn,
+      this.#button('lsai-icon', '⚙', 'Settings', () => void this.#openSettings()),
       this.#button('lsai-icon', '×', 'Close the panel', () => this.#d.onClose()),
     );
     const row2 = this.#h('div', 'lsai-row');
@@ -192,6 +198,111 @@ export class Panel {
     this.root.append(head, log, apps, foot);
     this.#els = { status, chatSelect, provider, model, effort, log, apps, foot, instrBtn, chips, web, input, send, stop };
     this.#renderChips();
+  }
+
+  // ---------- settings ----------
+
+  async #openSettings(): Promise<void> {
+    if (this.#closeSettings) return;
+    const opener = this.#doc.activeElement as HTMLElement | null;
+    const wrap = this.#h('div', 'lsai-modal-wrap');
+    const box = this.#h('div', 'lsai-modal');
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', 'Settings');
+    box.tabIndex = -1;
+    const close = (): void => {
+      wrap.remove();
+      this.#closeSettings = null;
+      opener?.focus();
+    };
+    const head = this.#h('div', 'lsai-modal-head');
+    head.append(this.#h('strong', undefined, 'Settings'), this.#button('lsai-icon', '×', 'Close settings', close));
+    const body = this.#h('div', 'lsai-modal-body', 'Loading…');
+    box.append(head, body);
+    wrap.appendChild(box);
+    wrap.addEventListener('click', (e) => {
+      if (e.target === wrap) close();
+    });
+    wrap.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close();
+      }
+    });
+    this.#closeSettings = close;
+    this.root.appendChild(wrap);
+    box.focus();
+
+    const b = this.#d.bridge;
+    try {
+      if (!b) throw new Error('The bridge is not set up yet.');
+      const state = await b.settings();
+      if (this.#closeSettings === close) this.#fillSettings(body, state);
+    } catch (err) {
+      body.textContent = `Could not load the settings: ${(err as Error).message}`;
+    }
+  }
+
+  #fillSettings(body: HTMLElement, state: SettingsState): void {
+    const b = this.#d.bridge;
+    const message = this.#h('div', 'lsai-hint');
+    const rows: { key: keyof AutoApprove; label: string; hint: string }[] = [
+      { key: 'writes', label: 'Approve all writes', hint: 'New blocks, tasks and pages' },
+      { key: 'edits', label: 'Approve all edits', hint: 'Changes to existing blocks' },
+      { key: 'deletes', label: 'Approve all deletes', hint: 'Removing blocks' },
+    ];
+    let current = state.autoApprove;
+    const boxes = new Map<keyof AutoApprove, HTMLInputElement>();
+    const show = (): void => {
+      for (const [key, input] of boxes) input.checked = current[key];
+    };
+    const save = async (): Promise<void> => {
+      const next = { ...current };
+      for (const [key, input] of boxes) {
+        next[key] = input.checked;
+        input.disabled = true;
+      }
+      message.className = 'lsai-hint';
+      message.textContent = 'Saving…';
+      try {
+        current = (await (b as BridgeClient).saveAutoApprove(next)).autoApprove;
+        message.textContent = 'Saved. Used from the next change.';
+      } catch (err) {
+        message.className = 'lsai-hint lsai-bad';
+        message.textContent = `Not saved: ${(err as Error).message}`;
+      }
+      show();
+      for (const input of boxes.values()) input.disabled = false;
+    };
+
+    const section = this.#h('div', 'lsai-setting');
+    section.appendChild(this.#h('div', 'lsai-setting-title', 'Auto-approve'));
+    section.appendChild(this.#h('div', 'lsai-hint', `Skip the card for these changes in ${state.graph ? `"${state.graph}"` : 'this graph'}.`));
+    for (const row of rows) {
+      const label = this.#h('label', 'lsai-check');
+      const input = this.#h('input');
+      input.type = 'checkbox';
+      input.disabled = !state.writable;
+      input.addEventListener('change', () => void save());
+      boxes.set(row.key, input);
+      const text = this.#h('span');
+      text.append(this.#h('span', undefined, row.label), this.#h('span', 'lsai-hint', row.hint));
+      label.append(input, text);
+      section.appendChild(label);
+    }
+    section.appendChild(
+      this.#h(
+        'div',
+        'lsai-hint',
+        state.writable
+          ? 'Also covers Claude Desktop and Codex. A change with a warning (web link, new page, hidden link) and any memory change still ask. Edits and deletes wait 2 seconds, so you can Abort.'
+          : "The AI can't write to this graph, so these have no effect.",
+      ),
+    );
+    section.appendChild(message);
+    show();
+    body.replaceChildren(section);
   }
 
   // ---------- your instructions ----------
@@ -363,11 +474,17 @@ export class Panel {
     this.#unsub?.();
     this.#changes.clear();
     this.#appChanges.clear();
+    this.#closeSettings?.();
   }
 
   /** An approval event from a connected app (main.ts follows those, even with the panel closed). */
   appEvent(ev: BridgeEvent): void {
     this.#appChanges.onEvent(ev, () => this.#els.apps);
+    // These cards belong to no chat, so a finished one leaves. One from the backlog goes at once.
+    if (ev.type === 'approval.resolved') {
+      const id = String(ev.data.id);
+      setTimeout(() => this.#appChanges.drop(id), Date.now() - ev.ts > APP_CARD_KEPT_MS ? 0 : APP_CARD_KEPT_MS);
+    }
   }
 
   focus(): void {
@@ -417,6 +534,14 @@ export class Panel {
     } else {
       this.#setup('Cannot reach the bridge', [e.message, 'Is it running?  node bin/logseq-ai-bridge.ts start']);
     }
+  }
+
+  async #refreshVersion(): Promise<void> {
+    const b = this.#d.bridge;
+    const h = await b?.health().catch(() => null);
+    if (!b || !h?.version) return;
+    this.#bridgeVersion = h.version;
+    this.#conn({ state: 'live', mode: b.mode });
   }
 
   #conn(s: ConnState): void {
@@ -672,8 +797,12 @@ export class Panel {
     if (this.#destroyed || chatId !== this.#chatId) return;
     if (ev.type === 'log.gap' || (this.#epoch !== null && ev.epoch && ev.epoch !== this.#epoch)) {
       // The bridge restarted or events were dropped: reload the transcript.
+      const waiting = this.#busy;
       this.#epoch = ev.epoch || null;
-      void this.#selectChat(chatId);
+      void this.#selectChat(chatId).then(() => {
+        if (waiting && !this.#busy) this.#els.log.appendChild(this.#h('div', 'lsai-notice', 'The bridge restarted, so this reply was lost. Send your message again.'));
+      });
+      void this.#refreshVersion();
       return;
     }
     this.#epoch = ev.epoch || this.#epoch;

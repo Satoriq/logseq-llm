@@ -8,7 +8,7 @@ import type { ChatStore, StoredMessage } from '../chats/store.ts';
 import { log } from '../log.ts';
 import { MCP_SERVER_NAME } from '../mcp/endpoint.ts';
 import type { McpSessions } from '../mcp/endpoint.ts';
-import type { Effort, ModelInfo, Provider, TurnRequest, TurnResult } from './types.ts';
+import type { Effort, ModelInfo, Provider, TurnInfo, TurnRequest, TurnResult } from './types.ts';
 
 /**
  * Claude through the user's own, unmodified `claude` binary (Pro plan), headless.
@@ -40,13 +40,13 @@ export type ClaudeCliOptions = {
   toolNames: () => string[];
   store: ChatStore;
   /** Built-in prompt, your instructions and the memory page, read fresh for every turn. */
-  systemPrompt: (turn: { chatId: string; turnId: string }) => Promise<string>;
+  systemPrompt: (turn: TurnInfo) => Promise<string>;
   /** --restricted (default true). Turn off only if your claude version rejects it. */
   restricted: boolean;
   /** Offer web search (WebSearch only, never WebFetch) when the user asks for it. */
   webSearch?: boolean;
-  /** Renders the page/selection the user attached, filtered for cloud. */
-  renderContext: (uuids: string[], chatId: string, turnId: string) => Promise<string>;
+  /** Renders the page/selection the user attached, filtered for this provider. */
+  renderContext: (uuids: string[], turn: TurnInfo) => Promise<string>;
   turnTimeoutMs: number;
 };
 
@@ -99,12 +99,17 @@ function childEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-/** Earlier messages to hand over when a chat moves to claude. Local-model replies stay local. */
-function handoff(messages: StoredMessage[]): string {
-  const prior = messages.slice(0, -1).filter((m) => m.role === 'user' || m.meta?.locality === 'cloud').slice(-20);
+/**
+ * What claude's session hasn't seen, from a transcript already filtered for cloud: all of it for
+ * a new session, or whatever came after claude's last reply when resuming.
+ */
+export function handoff(messages: StoredMessage[], resume: boolean): string {
+  const earlier = messages.slice(0, -1);
+  const from = resume ? earlier.findLastIndex((m) => m.meta?.provider === 'claude') + 1 : 0;
+  const prior = earlier.slice(from).slice(-20);
   if (prior.length === 0) return '';
   const lines = prior.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${messageText(m).slice(0, 4000)}`);
-  return `Conversation so far (earlier turns; replies from local models are not included):\n${lines.join('\n\n')}\n\n`;
+  return `Conversation so far (earlier turns):\n${lines.join('\n\n')}\n\n`;
 }
 
 type ClaudeEvent = Record<string, unknown> & { type?: string; subtype?: string };
@@ -148,17 +153,18 @@ export class ClaudeCliProvider implements Provider {
 
     const last = req.messages.at(-1);
     const contextUuids = last?.meta?.contextUuids ?? [];
-    const context = contextUuids.length > 0 ? await o.renderContext(contextUuids, req.chatId, req.turnId) : '';
+    const turn = { chatId: req.chatId, turnId: req.turnId, locality: this.locality };
+    const context = contextUuids.length > 0 ? await o.renderContext(contextUuids, turn) : '';
     const prompt =
       `${todayLine(new Date(), web)}\n\n` +
-      (resume ? '' : handoff(req.messages)) +
+      handoff(req.messages, resume) +
       (context ? `The user has this open in Logseq (filtered by their privacy settings):\n<context>\n${context}\n</context>\n\n` : '') +
       (last ? messageText(last) : '');
 
     const mcp = o.sessions.create(req.chatId, req.turnId, 'cloud');
     const mcpConfigPath = join(o.runDir, `mcp-${req.turnId}.json`);
     const systemPromptFile = join(o.runDir, `system-${req.turnId}.md`);
-    await writeFile(systemPromptFile, await o.systemPrompt({ chatId: req.chatId, turnId: req.turnId }), { mode: 0o600 });
+    await writeFile(systemPromptFile, await o.systemPrompt(turn), { mode: 0o600 });
     const toolNames = o.toolNames();
     const expectedTools = new Set(toolNames.map((n) => `mcp__${MCP_SERVER_NAME}__${n}`));
     if (web) expectedTools.add(WEB_TOOL);

@@ -230,6 +230,17 @@ export class ChangeCards {
     }
   }
 
+  /** Takes a finished card off the screen. */
+  drop(id: string): void {
+    const c = this.#cards.get(id);
+    if (!c || c.outcome === null) return;
+    this.#cards.delete(id);
+    c.root.remove();
+    c.group.cards = c.group.cards.filter((x) => x !== c);
+    if (c.group.cards.length === 0) c.group.root.remove();
+    else this.#updateGroup(c.group);
+  }
+
   clear(): void {
     for (const c of this.#cards.values()) clearInterval(c.countdown);
     this.#cards.clear();

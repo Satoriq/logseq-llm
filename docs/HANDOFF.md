@@ -27,7 +27,7 @@ bridge (Node 26, TypeScript run directly, no runtime dependencies)
  ├─ privacy filter (deny/allow rules, #private, ai-access::)
  ├─ graph tools  ──execFile──▶  `logseq` CLI  ──▶  Logseq's db-worker (graph open in the app)
  ├─ approvals (cards in the panel, auto-apply modes, Abort)
- ├─ providers: claude -p (Pro plan) · echo (tests) · [planned: Anthropic API, OpenAI API, Ollama]
+ ├─ providers: claude -p (Pro plan) · Ollama (local) · API providers with Keychain keys · echo (tests)
  └─ /mcp endpoint  ◀── claude -p calls the graph tools here (per-turn token)
 ```
 
@@ -39,8 +39,8 @@ Graph access goes through the official `logseq` CLI.
 
 **Providers:**
 - `claude -p` on the user's Pro plan (done).
-- Anthropic API and OpenAI API (planned).
-- Ollama, local (planned; needs approval).
+- Anthropic API, OpenAI API and others (built; not yet tried with real keys).
+- Ollama, local (done; escalation still to come).
 
 **Privacy:**
 - allow/deny lists;
@@ -80,16 +80,17 @@ providers · 5 Ollama + escalation · 6 save chat · 7 D worker · 8 voice.
 | 3 approved writes (+ auto-apply, Apply all, Abort, folding, `#ai` tag, tags) | ✅ done, verified on the Mac |
 | Extras built since: properties, your instructions, step folding, web search, login agent, memory | ✅ built and tested here; **partly confirmed on the Mac** (see below) |
 | Claude Desktop and Codex, reads and writes | ✅ built; path through the real adapter and bridge checked against AI Sandbox; **panel dock and the apps themselves not yet confirmed** (TESTING 4j) |
-| Shared provider groundwork | **next** |
-| Real graph, read-only | after that |
-| 5 Ollama + escalation + consent cards | after that, with a small-model test first |
-| 4 Anthropic + OpenAI API providers | later |
+| Shared provider groundwork | ✅ built and tested |
+| 5a Ollama provider (`gemma4:12b`) | ✅ built; **panel use not yet confirmed** (TESTING 4k) |
+| 5b escalation, consent cards, consult mode | **next** |
+| 4 API providers (Claude, OpenAI, Gemini, Grok, DeepSeek, Mistral, OpenRouter) | ✅ built; **tested against fake servers only**, as the user has no keys yet (TESTING 4m) |
+| Real graph | not in scope for now: the user works on the test graph |
 | 6 save chat to graph | small, any time |
 | 7 D worker (comments / #Tasks, Inbox) | later |
 | 8 voice helper | later |
 | UI polish pass (T3-Code-like) | later |
 
-**Current versions:** bridge **0.11.1**, panel **0.8.0**. The panel's status line
+**Current versions:** bridge **0.14.0**, panel **0.10.0**. The panel's status line
 shows both, which is how you tell which build is running.
 
 **Confirmed on the user's Mac:**
@@ -144,6 +145,7 @@ Ask the user for these results before building on them.
   link to the memory page.
 - **🌐 toggle:** web search per message (Claude only). It starts off and the setting
   is remembered.
+- **⚙ Settings window.** Its first setting is Auto-approve (see Approvals).
 - **Stop** button. The status line shows the connection, the panel version and the
   bridge version.
 - **Theme:** follows Logseq 2.0 themes via the shadcn tokens (`--background` etc.),
@@ -158,14 +160,15 @@ Ask the user for these results before building on them.
   an exact Origin allowlist, a scoped bearer token (`plugin` or `voice`), and JSON
   bodies of at most 1 MB.
 - **Routes:**
-  - `/v1/health`, `/v1/providers`, `/v1/instructions` (GET and POST)
+  - `/v1/health`, `/v1/providers`, `/v1/instructions` and `/v1/settings` (GET and POST)
   - `/v1/approvals/:id`
   - `/v1/chats` (list, create, read, messages, cancel, events over SSE or long-poll)
   - `/mcp`
 - **Chats:** provider-neutral transcripts in the data folder. Each message records
-  provider, model, effort, locality, context ids and the web flag. When a chat moves
-  into Claude, it gets a handoff of the user's messages and earlier cloud replies;
-  local-model replies stay local.
+  provider, model, effort, locality, context ids and the web flag. `transcriptFor` gives
+  every provider its view: a cloud model gets only what was said to a cloud model, so a
+  local stretch stays local, your own messages included. When Claude starts or resumes, it
+  gets a handoff of the cloud turns it hasn't seen.
 - **`claude -p` provider**, one process per turn, continued with `--resume`. Exact
   flags:
   ```
@@ -182,6 +185,20 @@ Ask the user for these results before building on them.
     an `apiKeySource` other than `none` shows a warning.
   - Each turn starts with a line giving today's date and whether web search is on.
   - Text blocks before and after a tool call are separated by a blank line.
+- **Ollama provider**, one `/api/chat` loop per turn, on 127.0.0.1 only.
+  - The bridge sends the transcript and runs the tools (12 rounds at most) through
+    `ToolRunner`. Models get the local view of the notes, and no web search.
+  - Cloud tags and `remote_host` models are never offered, and it isn't offered at all
+    while Ollama is off.
+  - `num_ctx` goes with every request, and old chat, then old tool results, are trimmed to
+    fit, because Ollama cuts silently.
+- **API providers** (`providers/api.ts`), one tool loop over three formats: `wire-anthropic`,
+  `wire-responses` (OpenAI, xAI) and `wire-chat` (Gemini, DeepSeek, Mistral, OpenRouter).
+  - Keys come from the Keychain, and a provider is hidden until it has one.
+  - Addresses are fixed in code. `apiModels` in config only adds model ids.
+  - They count as cloud, up to 20 tool rounds and the last 40 messages per turn.
+  - Rate limits and server errors are retried twice. The Claude version header is
+    `2026-10-21`, so don't send `temperature`, `top_p` or `top_k`.
 - **System prompt** = the built-in `prompts/claude-system.md`, then the user's
   instructions, then the memory section. It is sent through a file so it doesn't show
   in `ps`; snapshot off means edits reach existing chats.
@@ -195,6 +212,7 @@ Ask the user for these results before building on them.
   - `tool <name> '<json>' [--as cloud|local]` (prints exactly what a model would see;
     write tools print the card, then decline)
   - `token`, `rotate-token`
+  - `keys` (which API keys are set, and how to add one)
   - `agent install|restart|status|uninstall`
   - `connect|disconnect claude-desktop|codex`
   - `mcp <app>` (started by the app, not by hand)
@@ -268,6 +286,10 @@ Ask the user for these results before building on them.
   - `all`: everything.
 
   AI Sandbox was planned as `own`, but the Mac's config has `additions`.
+- **Settings → Auto-approve:** three boxes in the panel: all writes, edits, deletes.
+  - Kept per graph in `settings.json`. Once saved, they replace `autoApply` for that graph.
+  - Only the panel's token can change them, so a model can't approve its own changes.
+  - A warning still gets the card, and memory always asks.
 - **"Apply all"** trusts the rest of the current answer only.
 - **No hidden waiting:** if no up-to-date panel is attached to the chat, a write fails
   fast with a notice. Otherwise an unanswered card times out after 10 minutes.
@@ -327,6 +349,9 @@ Ask the user for these results before building on them.
 | `readProperties` | `"names"` | `names` / `values` / `off` |
 | `webSearch` | true | allow the 🌐 toggle |
 | `claudeRestricted` | true | pass `--restricted` to claude |
+| `ollamaUrl` | `http://127.0.0.1:11434` | Ollama on this Mac; only 127.0.0.1 is accepted |
+| `ollamaContext` | 32768 | `num_ctx` sent to Ollama (8192–262144) |
+| `apiModels` | `{}` | extra model ids per API provider |
 | `cliTimeoutMs`, `cliConcurrency` | 15000, 2 | CLI limits |
 | `policy` | `{deny:[], allow:[]}` | privacy rules |
 
@@ -336,6 +361,7 @@ Data folder layout:
 - `chats/`
 - `audit.jsonl`
 - `instructions.md`
+- `settings.json` (0600)
 - `logs/`
 - `run/` (per-turn MCP config and prompt files, deleted after each turn)
 - `claude-cwd/`
@@ -442,6 +468,35 @@ Data folder layout:
 - `launchctl bootout` returns before the service has unloaded. A `bootstrap` straight after
   it fails with `Bootstrap failed: 5`, so `agent` waits for `print` to stop finding it.
 
+**API formats:**
+- GPT-6 Astra and GPT-6.1 Sol need the Responses API for tool calling. `store: false` means
+  output items, reasoning included, must go back unchanged in the next request.
+- DeepSeek with tools needs every earlier `reasoning_content` sent back, or it answers 400.
+  Chats keep only text, so its thinking is switched off.
+- Gemini tool calls can carry `extra_content` (a thought signature), which must go back.
+- Claude thinking blocks go back unchanged within a turn. After a `fallback` block, only
+  text from before it goes back, and tool calls from before it don't run.
+- Claude Opus 5.5 and Fable 5.1 can't turn thinking off, so the picker has no Off for them.
+
+**Bridge restarts kill running replies.** Check that no chat is busy before `agent restart`.
+
+**`gemma4:12b` on the 24 GB M2 Air:**
+- It used the right tools in all 9 real tasks, including cards and Ukrainian.
+- Reading a cold prompt runs at about 32 tokens/s (8,750 tokens took 273 s), and a cached
+  prefix took 13 s. The system prompt and tools stay the same, so keep `keep_alive` long
+  enough to reuse them, and keep anything that changes each turn out of the system prompt.
+- Ollama reported 9.8 GB in a short run and 16.3 GB after a few tool turns. With the usual
+  apps open, the Mac ended with 138 MB free and 7.4 GB of swap.
+- In Ukrainian it translated block text instead of quoting it.
+
+**Ollama 0.40:**
+- The user's model reports `capabilities` with `tools` and `thinking`, and `thinking.values`
+  `[false, true]` with default `true`, so it has on/off, not levels.
+- Tool results go back as `{"role":"tool","tool_name":...}`; arguments are an object.
+- `gemma4:12b` runs on the MLX runner at `nvfp4`.
+- The app can pull a model itself: no `ollama pull` process shows, and files just appear.
+- The app's bundle has a LaunchAgent and can register itself as a login item.
+
 **Logseq's own API server:** it was listening on 127.0.0.1:12315 and serves `/mcp`, with no
 privacy filter. Never point a client at it. PLAN §6 assumed this server stays off.
 
@@ -462,11 +517,12 @@ bridge/
   src/mcp/stdio.ts             stdio adapter that Claude Desktop and Codex start
   src/approvals.ts             approval queue, auto/grace/abort/apply-all
   src/chats/{store,turns}.ts   transcripts, one turn at a time per chat
-  src/providers/{claude-cli,echo,types}.ts
+  src/providers/{claude-cli,ollama,echo,types}.ts
+  src/providers/{api,stream,wire-anthropic,wire-responses,wire-chat}.ts   API providers
   src/graph/{reader,entity}.ts CLI queries → normalized nodes (props, tags, refs)
   src/policy/{rules,policy,redact}.ts  privacy filter
-  src/tools/{cli,read,write,properties,registry}.ts
-  src/instructions.ts, memory.ts, agent.ts, doctor.ts, check-claude.ts, audit.ts, auth.ts, events.ts, log.ts
+  src/tools/{cli,read,write,properties,registry,runner}.ts
+  src/keychain.ts, settings.ts, instructions.ts, memory.ts, agent.ts, doctor.ts, check-claude.ts, audit.ts, auth.ts, events.ts, log.ts
   test/*.test.ts + fixtures/ (fake-graph.ts = in-memory CLI, fake-claude.mjs = stream-json stand-in)
 plugin/
   src/main.ts (Logseq wiring, settings) · panel.ts (UI) · changes.ts (cards) · render.ts (safe Markdown)
@@ -476,7 +532,7 @@ docs/PLAN.md · docs/TESTING.md · docs/HANDOFF.md (this file)
 
 ## 9. How to work on it
 
-**Bridge tests (106):**
+**Bridge tests (148):**
 
 ```bash
 cd bridge && node --test "test/**/*.test.ts"
@@ -522,50 +578,28 @@ relative to the repo.
 
 ## 10. Next steps and open questions
 
-The user's order: shared groundwork, real graph read-only, step 5, then step 4.
+The real graph is out of scope for now. Next: try the API providers once there are keys.
 
 1. **Get the Mac results** listed in §3 first, especially 4i and 4j.
-   - **Shared groundwork, no installs:**
-     - `turns.ts` passes the raw transcript, though `types.ts` says it's filtered. Filter it
-       there, before any new provider.
-     - Move tool running out of the MCP endpoint.
-     - Pass locality to `renderContext` and memory (hard-coded `cloud` in `app.ts`).
-     - Store tool calls: only reply text is kept, so stateless providers lose block ids.
-     - Run a handoff on `--resume` too: today Claude misses a local stretch, and the
-       first handoff sends your typed messages with no card.
-   - **Real graph, read-only.** Nothing in the build order covered it. `graph` is one
-     value, and there are no deny rules yet. Set rules first, and keep `writeGraphs` as is.
-2. **Step 5, Ollama.** It makes `#private` and `local-only` notes usable.
-   - **Needs approval:** installing Ollama, a model chosen by the Mac's memory, and
-     `OLLAMA_NO_CLOUD=1`.
-   - **Memory:** a 24 GB M2 with the usual apps open had 103 MB free and 9 GB compressed,
-     so test a smaller model's tool calling before building consent cards.
-   - **Plan (PLAN.md §4.7–4.8):**
-     - Call `/api/chat` with tools and `think` (read the model's capabilities from
-       `/api/show`).
-     - Set an explicit `num_ctx`, since the default is 4k on machines with under
-       24 GB VRAM.
-     - Use a short `keep_alive`, and refuse cloud tags.
-     - Escalation and consent cards: Ask once / Switch this chat / Stay local / Review
-       what's sent. Consult mode sends only the question.
-     - The local provider exists but web search is off for it.
-3. **Step 4, Anthropic API and OpenAI API:**
-   - fetch with streaming, with the bridge running the tool loop itself;
-   - Anthropic's effort goes in `output_config.effort`; Claude 5 rejects
-     `budget_tokens`;
-   - keys go in the Keychain via `security add-generic-password -s logseq-ai -a <name> -w`
-     (the user runs it).
-4. **Step 6, save chat:** an `#AIChat` page, one block per message.
-5. **Step 7, the D worker:**
+2. **Local model speed and memory.** Ask before pulling anything else. Try
+   `gemma4:12b-it-q4_K_M` (this build is `nvfp4`), and a smaller `ollamaContext`.
+3. **Step 5b, escalation.** Local chats stay local today, and a cloud model can't see them.
+   The consent card is what lets a chosen part cross over.
+   - **Plan (PLAN.md §4.8):** consent cards with Ask once / Switch this chat / Stay local /
+     Review what's sent. Consult mode sends only the question.
+4. **Batch delete.** `remove_block` takes one block, so "remove these 22 lines" means 22 calls
+   and 22 cards, and small models lose track. Add one tool and one card for several blocks.
+5. **Step 6, save chat:** an `#AIChat` page, one block per message.
+6. **Step 7, the D worker:**
    - It watches comments mentioning the AI and #Tasks assigned to it, fed by
      `DB.onChanged` → bridge, with UUIDs only.
    - Its drafts wait as cards in an Inbox (open question Q7, default: every write
      needs approval).
    - It needs a mention page other than "ai", and it must ignore its own blocks.
-6. **Step 8, voice:** a Swift helper with a global hotkey. Open questions Q5 (voice
+7. **Step 8, voice:** a Swift helper with a global hotkey. Open questions Q5 (voice
    edits: add-only, confirmed with a click) and Q6 (the hotkey; Shortcuts support
    later).
-7. **UI polish pass** for the panel.
-8. **Ideas parked:**
+8. **UI polish pass** for the panel.
+9. **Ideas parked:**
    - WebFetch with a per-URL approval card;
    - a committed browser-test harness.

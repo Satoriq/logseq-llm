@@ -782,10 +782,10 @@ Run these from the `bridge` folder.
 node --test "test/**/*.test.ts"
 ```
 
-Expected: `pass 106`, `fail 0`.
+Expected: `pass 148`, `fail 0`.
 
 2. Load the new build, then switch the plugin off and on. The status line should show
-   `panel 0.8.0 · bridge 0.11.1`.
+   `panel 0.10.0 · bridge 0.14.0`.
 
 ```bash
 cd ../plugin && npm run build && cd ../bridge && node bin/logseq-ai-bridge.ts agent restart
@@ -825,12 +825,109 @@ grep -E '"client"|"client:' "$HOME/Library/Application Support/logseq-ai/audit.j
 node bin/logseq-ai-bridge.ts disconnect claude-desktop
 ```
 
+### 4k. A local model (Ollama)
+
+Ollama runs the model on this Mac, so `#private` and `local-only` notes can be used and
+nothing leaves the machine. Ollama must be running. On the 24 GB Air, expect about 45 to 175
+seconds per answer, and up to about 5 minutes for the first long prompt after the model was
+unloaded. It uses a lot of memory, so close what you can.
+
+1. Check what's installed, from the `bridge` folder:
+
+```bash
+ollama list && cat ~/.ollama/server.json
+```
+
+Expected: `gemma4:12b`, and `"disable_ollama_cloud": true`.
+
+2. Restart the bridge, then switch the plugin off and on. **Ollama · local** appears in the
+   provider picker. Quit Ollama and reopen the panel: it's gone, and it comes back when
+   Ollama runs again.
+
+```bash
+node bin/logseq-ai-bridge.ts agent restart
+```
+
+3. Pick **Ollama → gemma4:12b → Auto** and ask: *"Is there a secret note on my AI Test page?
+   Quote it."* It should quote "This one is secret". Claude can't see that block.
+4. Ask it to add a block, then to change your block "Apples are red". The addition goes in
+   under `autoApply`, and the edit shows the usual card.
+5. Now switch the same chat to **Claude** and ask *"What did I just ask about?"*. A notice
+   says Claude can't see what you said to the local model, and it doesn't know.
+6. Effort: **Off** answers without thinking, and is faster. **High** just means thinking on,
+   because this model has no levels. **Auto** uses its default, which is on.
+7. Stop works during a reply.
+
+Change the context with `"ollamaContext"` in config.json (8192 to 262144), then restart the
+bridge. More context needs more memory.
+
+### 4l. Settings: Auto-approve
+
+Load the new build as in 4j, step 2.
+
+1. Click **⚙** in the panel. A Settings window opens with three unticked or ticked boxes,
+   for your graph. They start from `autoApply` in config.json, so with `additions` the
+   first box is ticked.
+2. Untick **Approve all writes**. It says "Saved". Ask for a new block: you now get a card.
+3. Tick **Approve all edits** and ask to change a block. It waits 2 seconds with **Abort**,
+   then goes in without a click. Tick **Approve all deletes** and try a delete the same way.
+4. With everything ticked, ask for a block with a web link in it. You still get a card, and
+   so does anything for memory.
+5. Close with ×, Esc or a click outside the window. Reopen it: your choices are still there.
+6. Check what's stored and logged:
+
+```bash
+cat "$HOME/Library/Application Support/logseq-ai/settings.json"
+```
+
+```bash
+grep autoApprove "$HOME/Library/Application Support/logseq-ai/audit.jsonl" | tail -n 3
+```
+
+The boxes also cover Claude Desktop, Codex and local models. They apply per graph.
+
+### 4m. API providers
+
+These have only been tested against fake servers, so expect to find problems. Each provider
+bills per token, and what you read goes to that company, filtered like any cloud model.
+
+1. See what's set, and how to add a key:
+
+```bash
+node bin/logseq-ai-bridge.ts keys
+```
+
+2. Add one, for example Claude. It asks for the key at a hidden prompt, and the key goes
+   into your Keychain, not a file. The names are `anthropic`, `openai`, `gemini`, `xai`,
+   `deepseek`, `mistral` and `openrouter`.
+
+```bash
+security add-generic-password -U -s logseq-ai -a anthropic -w
+```
+
+3. Within 30 seconds, reopen the panel. The provider appears in the picker.
+4. Ask *"What's on my AI Test page?"* You should see tool steps, then a reply without "This one
+   is secret". Then ask for an edit: you get the usual card.
+5. For each provider, check one read and one edit, because each format can fail differently.
+   If a tool request is refused with a 400, send me the message from the chat.
+6. A newer model isn't in the picker? Add it to config.json, then restart the bridge:
+
+```bash
+node -e 'const fs=require("fs");const f=process.env.HOME+"/Library/Application Support/logseq-ai/config.json";const c=JSON.parse(fs.readFileSync(f));c.apiModels={openai:["model-id-here"]};fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")'
+```
+
+7. To remove a key:
+
+```bash
+security delete-generic-password -s logseq-ai -a anthropic
+```
+
 ### Which build is running?
 
-The panel's status line shows `● Connected · panel 0.8.0 · bridge 0.11.1`. If
+The panel's status line shows `● Connected · panel 0.10.0 · bridge 0.14.0`. If
 it shows no version numbers, Logseq still runs an old plugin build. Run
 `npm run build` in `plugin/`, then switch the plugin off and on. Approval cards
-need panel ≥ 0.2.0; batched edits need 0.3.0; Apply all, Abort and folding need 0.4.0; the ✎ instructions editor needs 0.5.0 and bridge 0.7.0; 🌐 web search needs 0.6.0 and bridge 0.8.0; the memory link needs 0.7.0 (memory itself is bridge 0.9.0); cards from connected apps need 0.8.0 and bridge 0.11.0.
+need panel ≥ 0.2.0; batched edits need 0.3.0; Apply all, Abort and folding need 0.4.0; the ✎ instructions editor needs 0.5.0 and bridge 0.7.0; 🌐 web search needs 0.6.0 and bridge 0.8.0; the memory link needs 0.7.0 (memory itself is bridge 0.9.0); cards from connected apps need 0.8.0 and bridge 0.11.0; ⚙ settings need 0.9.0 and bridge 0.13.0; noticing a restarted bridge needs 0.10.0 and bridge 0.14.0.
 
 If a write needs your approval and no up-to-date panel is open on that chat,
 the bridge doesn't wait. It tells Claude right away that nothing was changed,

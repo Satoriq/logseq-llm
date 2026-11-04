@@ -8,9 +8,11 @@ import { BRIDGE_SCRIPT, defaultAgentDeps, runAgent } from '../src/agent.ts';
 import { checkClaude } from '../src/check-claude.ts';
 import { runDoctor } from '../src/doctor.ts';
 import { shutdown } from '../src/http/server.ts';
+import { addKeyCommand, keychain } from '../src/keychain.ts';
 import { log } from '../src/log.ts';
 import { connectClient, disconnectClient, isMcpClient, MCP_CLIENTS, readClientTokens } from '../src/mcp/clients.ts';
 import { runStdio } from '../src/mcp/stdio.ts';
+import { API_PRESETS } from '../src/providers/api.ts';
 import { CLAUDE_MODELS } from '../src/providers/claude-cli.ts';
 import { isEffort } from '../src/providers/types.ts';
 
@@ -33,6 +35,7 @@ Usage:
                                                cut that app off at once and remove it from its config file
   node bin/logseq-ai-bridge.ts token          print the plugin token (paste it into the plugin settings)
   node bin/logseq-ai-bridge.ts rotate-token   make new tokens (the old ones stop working)
+  node bin/logseq-ai-bridge.ts keys           which API keys are set, and how to add one
 
 Data dir: ${defaultDataDir()}  (override with LOGSEQ_AI_DATA_DIR)`;
 
@@ -67,6 +70,16 @@ async function main(): Promise<void> {
     process.stdout.write(tokens.plugin + '\n');
     return;
   }
+  if (cmd === 'keys') {
+    for (const p of API_PRESETS) {
+      const set = await keychain.has(p.key);
+      process.stdout.write(`${set ? 'set    ' : 'not set'}  ${p.label}\n`);
+      if (!set) process.stdout.write(`         get a key: ${p.keysPage}\n         then run:  ${addKeyCommand(p.key)}\n`);
+    }
+    process.stdout.write('\nThe key is asked for at a hidden prompt. The panel offers a provider within 30 seconds of its key being added.\n');
+    return;
+  }
+
   if (cmd === 'rotate-token') {
     await rotateTokens(paths.tokens);
     process.stdout.write('New tokens written. Restart the bridge and paste the new plugin token into the plugin settings.\n');

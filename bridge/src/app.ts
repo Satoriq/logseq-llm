@@ -6,14 +6,22 @@ import { AuditLog } from './audit.ts';
 import type { Tokens } from './auth.ts';
 import { ChatStore } from './chats/store.ts';
 import { TurnRunner } from './chats/turns.ts';
-import type { BridgeConfig, DataPaths } from './config.ts';
+import type { AutoApplyMode, BridgeConfig, DataPaths } from './config.ts';
 import { GraphReader } from './graph/reader.ts';
 import { createBridgeServer, listen } from './http/server.ts';
 import { APPS_CHAT_ID, readClientTokens } from './mcp/clients.ts';
 import { McpEndpoint } from './mcp/endpoint.ts';
+import { ToolRunner } from './tools/runner.ts';
+import type { TurnInfo } from './providers/types.ts';
 import { Policy } from './policy/policy.ts';
 import { parseRules } from './policy/rules.ts';
 import { ClaudeCliProvider } from './providers/claude-cli.ts';
+import { keychain } from './keychain.ts';
+import type { Secrets } from './keychain.ts';
+import { API_PRESETS, ApiProvider } from './providers/api.ts';
+import { OllamaProvider } from './providers/ollama.ts';
+import { autoApproveFrom, Settings } from './settings.ts';
+import type { AutoApprove } from './settings.ts';
 import { EchoProvider } from './providers/echo.ts';
 import { LogseqCli } from './tools/cli.ts';
 import { GraphGuard, readTools } from './tools/read.ts';
@@ -34,8 +42,12 @@ export type Graph = {
   memory?: MemoryPage;
 };
 
+function autoApplyMode(config: BridgeConfig): AutoApplyMode {
+  return config.graph !== null ? (config.autoApply[config.graph] ?? 'none') : 'none';
+}
+
 /** With `paths`, the write tools are included too (they need the run dir and the audit log). */
-export function buildGraph(config: BridgeConfig, paths?: DataPaths, own?: OwnBlocks): Graph {
+export function buildGraph(config: BridgeConfig, paths?: DataPaths, own?: OwnBlocks, autoApprove?: () => Promise<AutoApprove | null>): Graph {
   const cli = new LogseqCli({ bin: config.logseqBin, writeGraphs: config.writeGraphs, timeoutMs: config.cliTimeoutMs, concurrency: config.cliConcurrency });
   const reader = new GraphReader({ run: (req) => cli.run(req), graph: config.graph });
   const policy = new Policy({ deny: parseRules(config.policy.deny), allow: parseRules(config.policy.allow) });
@@ -57,7 +69,8 @@ export function buildGraph(config: BridgeConfig, paths?: DataPaths, own?: OwnBlo
         writeGraphs: config.writeGraphs,
         runDir: paths.run,
         audit: new AuditLog(paths.audit),
-        autoApply: config.graph !== null ? (config.autoApply[config.graph] ?? 'none') : 'none',
+        autoApply: autoApplyMode(config),
+        ...(autoApprove ? { autoApprove } : {}),
         aiTag: config.aiTag,
         ...(own ? { own } : {}),
         ...(memory ? { memory } : {}),
@@ -77,7 +90,7 @@ export type Runtime = {
   listen: (port: number) => Promise<number>;
 };
 
-export async function createRuntime(opts: { config: BridgeConfig; paths: DataPaths; tokens: Tokens; graph?: Graph }): Promise<Runtime> {
+export async function createRuntime(opts: { config: BridgeConfig; paths: DataPaths; tokens: Tokens; graph?: Graph; secrets?: Secrets }): Promise<Runtime> {
   const { config, paths, tokens } = opts;
   const store = new ChatStore(paths.chats);
   // Blocks the AI created per chat, kept in the chat's metadata (UUIDs only).
@@ -91,25 +104,27 @@ export async function createRuntime(opts: { config: BridgeConfig; paths: DataPat
       await store.update(chatId, { aiCreated: [...set].slice(-5000) });
     },
   };
-  const graph = opts.graph ?? buildGraph(config, paths, own);
+  const settings = new Settings({ file: paths.settings, graph: config.graph, fallback: autoApproveFrom(autoApplyMode(config)) });
+  const graph = opts.graph ?? buildGraph(config, paths, own, () => settings.saved());
   const audit = new AuditLog(paths.audit);
   let port = config.port;
   let turns: TurnRunner | undefined;
   const events = (chatId: string) => (turns as TurnRunner).eventLog(chatId);
   const approvals = new Approvals({ events });
   await store.ensure(APPS_CHAT_ID, 'Connected apps');
-  const mcp = new McpEndpoint({ tools: graph.tools, audit, events, approvals, clients: () => readClientTokens(paths.mcpClients) });
+  const runner = new ToolRunner({ tools: graph.tools, audit, events, approvals });
+  const mcp = new McpEndpoint({ runner, clients: () => readClientTokens(paths.mcpClients) });
 
   const getBlock = graph.tools.find((t) => t.name === 'get_block');
-  const renderContext = async (uuids: string[], chatId: string, turnId: string): Promise<string> => {
+  const renderContext = async (uuids: string[], { chatId, turnId, locality }: TurnInfo): Promise<string> => {
     if (!getBlock) return '';
     const parts: string[] = [];
     for (const uuid of uuids.slice(0, 20)) {
       try {
-        const out = await getBlock.run({ uuid, depth: 3 }, { locality: 'cloud' });
+        const out = await getBlock.run({ uuid, depth: 3 }, { locality });
         if (out.sentUuids.length === 0) continue;
         parts.push(out.text);
-        await audit.record({ kind: 'tool', chatId, turnId, tool: 'context', locality: 'cloud', sentUuids: out.sentUuids, hiddenCount: out.hiddenCount });
+        await audit.record({ kind: 'tool', chatId, turnId, tool: 'context', locality, sentUuids: out.sentUuids, hiddenCount: out.hiddenCount });
       } catch {
         // A context block that can't be read is simply left out.
       }
@@ -119,6 +134,14 @@ export async function createRuntime(opts: { config: BridgeConfig; paths: DataPat
 
   const builtIn = await readFile(new URL('../prompts/claude-system.md', import.meta.url), 'utf8');
   const instructions = new Instructions({ file: paths.instructions, builtIn });
+  const systemPrompt = async ({ chatId, turnId, locality }: TurnInfo): Promise<string> => {
+    if (!graph.memory) return instructions.systemPrompt();
+    const view = await graph.memory.view(locality);
+    if (view.sentUuids.length > 0) {
+      await audit.record({ kind: 'tool', chatId, turnId, tool: 'memory', locality, sentUuids: view.sentUuids, hiddenCount: view.hiddenCount });
+    }
+    return instructions.systemPrompt(memorySection(graph.memory.title, view));
+  };
   const claude = new ClaudeCliProvider({
     bin: config.claudeBin,
     cwd: paths.claudeCwd,
@@ -127,28 +150,25 @@ export async function createRuntime(opts: { config: BridgeConfig; paths: DataPat
     sessions: mcp.sessions,
     toolNames: () => mcp.toolNames(),
     store,
-    systemPrompt: async ({ chatId, turnId }) => {
-      if (!graph.memory) return instructions.systemPrompt();
-      const view = await graph.memory.view('cloud');
-      if (view.sentUuids.length > 0) {
-        await audit.record({ kind: 'tool', chatId, turnId, tool: 'memory', locality: 'cloud', sentUuids: view.sentUuids, hiddenCount: view.hiddenCount });
-      }
-      return instructions.systemPrompt(memorySection(graph.memory.title, view));
-    },
+    systemPrompt,
     restricted: config.claudeRestricted,
     webSearch: config.webSearch,
     renderContext,
     turnTimeoutMs: 15 * 60_000,
   });
+  const ollama = new OllamaProvider({ url: config.ollamaUrl, contextTokens: config.ollamaContext, runner, systemPrompt, renderContext });
+  const apis = API_PRESETS.map(
+    (preset) => new ApiProvider({ preset, secrets: opts.secrets ?? keychain, runner, systemPrompt, renderContext, extraModels: config.apiModels[preset.id] ?? [] }),
+  );
   turns = new TurnRunner({
     store,
-    providers: [claude, new EchoProvider()],
+    providers: [claude, ollama, ...apis, new EchoProvider()],
     audit,
     epoch: randomUUID(),
     // A cancelled or finished turn can't apply anything any more.
     onSettled: (chatId) => approvals.rejectAll(chatId, 'cancelled'),
   });
-  const server = createBridgeServer({ port, allowedOrigins: config.allowedOrigins, tokens, store, turns, mcp, approvals, instructions, audit, memoryPage: graph.memory?.title ?? null });
+  const server = createBridgeServer({ port, allowedOrigins: config.allowedOrigins, tokens, store, turns, mcp, approvals, instructions, settings, writable: config.graph !== null && config.writeGraphs.includes(config.graph), audit, memoryPage: graph.memory?.title ?? null });
   return {
     server,
     turns,
