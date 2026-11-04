@@ -166,13 +166,18 @@ export async function runAgent(cmd: string, d: AgentDeps): Promise<boolean> {
   const target = `gui/${d.uid}`;
   const service = `${target}/${AGENT_LABEL}`;
   const loaded = async (): Promise<boolean> => (await d.launchctl(['print', service])).ok;
+  // bootout returns before launchd has finished unloading, and a bootstrap right after it fails with error 5.
+  const unload = async (): Promise<void> => {
+    await d.launchctl(['bootout', service]);
+    for (let i = 0; i < 40 && (await loaded()); i++) await d.sleep(250);
+  };
 
   if (cmd === 'install') {
     if (!(await loaded()) && (await d.health())) {
       d.out(`agent: a bridge is already running on port ${d.port} (probably in a Terminal window). Stop it with Ctrl-C, then run "agent install" again.`);
       return false;
     }
-    if (await loaded()) await d.launchctl(['bootout', service]);
+    if (await loaded()) await unload();
     await mkdir(dirname(plist), { recursive: true });
     await mkdir(d.logDir, { recursive: true, mode: 0o700 });
     // launchd refuses plists that others can write.
@@ -204,7 +209,7 @@ export async function runAgent(cmd: string, d: AgentDeps): Promise<boolean> {
       return false;
     }
     // Reload from the file, so a re-pulled bridge or changed settings take effect.
-    if (await loaded()) await d.launchctl(['bootout', service]);
+    if (await loaded()) await unload();
     await trimLog(log);
     const r = await d.launchctl(['bootstrap', target, plist]);
     if (!r.ok) {

@@ -43,11 +43,11 @@ async function deps(over: Partial<AgentDeps> = {}) {
 }
 
 test('agent plist: exact program, escaped paths, restart only after a crash', () => {
-  const p = agentPlist({ node: '/Users/lol/n & m/node', script: '/Users/lol/Chrome/logseq AI/logseq-llm/bridge/bin/logseq-ai-bridge.ts', logFile: '/Users/lol/Library/Application Support/logseq-ai/logs/bridge.log', env: { PATH: '/usr/bin:/bin' } });
+  const p = agentPlist({ node: '/Users/me/n & m/node', script: '/Users/me/my notes/logseq-llm/bridge/bin/logseq-ai-bridge.ts', logFile: '/Users/me/Library/Application Support/logseq-ai/logs/bridge.log', env: { PATH: '/usr/bin:/bin' } });
   assert.match(p, new RegExp(`<key>Label</key><string>${AGENT_LABEL.replace(/\./g, '\\.')}</string>`));
-  assert.match(p, /<array><string>\/Users\/lol\/n &amp; m\/node<\/string><string>\/Users\/lol\/Chrome\/logseq AI\/logseq-llm\/bridge\/bin\/logseq-ai-bridge\.ts<\/string><string>start<\/string><\/array>/);
-  assert.match(p, /<key>WorkingDirectory<\/key><string>\/Users\/lol\/Chrome\/logseq AI\/logseq-llm\/bridge<\/string>/);
-  assert.match(p, /<key>PATH<\/key><string>\/Users\/lol\/n &amp; m:\/usr\/bin:\/bin<\/string>/, "the Node's folder comes first");
+  assert.match(p, /<array><string>\/Users\/me\/n &amp; m\/node<\/string><string>\/Users\/me\/my notes\/logseq-llm\/bridge\/bin\/logseq-ai-bridge\.ts<\/string><string>start<\/string><\/array>/);
+  assert.match(p, /<key>WorkingDirectory<\/key><string>\/Users\/me\/my notes\/logseq-llm\/bridge<\/string>/);
+  assert.match(p, /<key>PATH<\/key><string>\/Users\/me\/n &amp; m:\/usr\/bin:\/bin<\/string>/, "the Node's folder comes first");
   assert.match(p, /<key>KeepAlive<\/key><dict><key>SuccessfulExit<\/key><false\/><\/dict>/);
   assert.match(p, /<key>LOGSEQ_AI_AGENT<\/key><string>1<\/string>/);
   assert.throws(() => agentPlist({ node: 'node', script: BRIDGE_SCRIPT, logFile: '/x.log', env: {} }), /absolute/);
@@ -76,6 +76,25 @@ test('agent install / status / restart / uninstall run only launchctl, with fixe
   assert.equal(await runAgent('uninstall', d), true);
   await assert.rejects(stat(plist));
   for (const c of calls) assert.ok(['print', 'bootstrap', 'bootout'].includes(c[0] as string), `unexpected launchctl ${c.join(' ')}`);
+});
+
+test('agent restart waits for launchd to finish unloading before it loads the agent again', async () => {
+  const { d, calls } = await deps();
+  await runAgent('install', d);
+  calls.length = 0;
+  const real = d.launchctl;
+  let unloading = 0;
+  d.launchctl = async (args) => {
+    if (args[0] === 'bootout') unloading = 2;
+    if (unloading > 0 && args[0] === 'print') return { ok: true, out: 'state = running\n' };
+    if (unloading > 0 && args[0] === 'bootstrap') return { ok: false, out: 'Bootstrap failed: 5: Input/output error' };
+    return real(args);
+  };
+  d.sleep = async () => {
+    unloading -= 1;
+  };
+  assert.equal(await runAgent('restart', d), true);
+  assert.deepEqual(calls.filter((c) => c[0] !== 'print').map((c) => c[0]), ['bootout', 'bootstrap']);
 });
 
 test('agent install refuses while a Terminal bridge holds the port; not on Linux', async () => {
