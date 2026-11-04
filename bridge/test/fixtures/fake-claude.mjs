@@ -79,6 +79,19 @@ if (prompt.includes('FAKE:error')) {
   out({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'boom', session_id: session });
   process.exit(1);
 }
+if (prompt.includes('FAKE:split')) {
+  // Like real claude: a text block, a tool call, then a new message with another text block.
+  const delta = (t) => out({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: t } } });
+  out({ type: 'stream_event', event: { type: 'message_start' } });
+  out({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'text' } } });
+  delta('I will create the pages.');
+  out({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'tool_use' } } });
+  out({ type: 'stream_event', event: { type: 'message_start' } });
+  out({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'text' } } });
+  delta('Done: 10 pages.');
+  out({ type: 'result', subtype: 'success', is_error: false, result: 'Done: 10 pages.', session_id: session });
+  process.exit(0);
+}
 for (const piece of text.match(/[\s\S]{1,20}/g)) {
   out({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: piece } } });
 }

@@ -265,3 +265,11 @@ test('your instructions: saved over HTTP (0600), added after the built-in rules,
   assert.match(audit, /"kind":"settings","chatId":"bridge","tool":"instructions","outcome":"saved 9 chars"/);
   assert.ok(!audit.includes('Be brief'), 'no instruction text in the audit log');
 });
+
+test('text before and after a tool call stays apart (no "pages.Done")', async () => {
+  const chat = await rt.store.create('split');
+  const events = await turn(chat.id, 'FAKE:split');
+  assert.equal(textOf(events), 'I will create the pages.\n\nDone: 10 pages.');
+  const stored = (await rt.store.messages(chat.id)).at(-1);
+  assert.match(JSON.stringify(stored?.parts), /pages\.\\n\\nDone/);
+});

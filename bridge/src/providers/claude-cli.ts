@@ -175,6 +175,20 @@ export class ClaudeCliProvider implements Provider {
     let failure: string | null = null;
     let result: ClaudeEvent | null = null;
     let sawDeltas = false;
+    // Text before and after a tool call arrives as separate blocks; keep them apart in the reply.
+    let tail = '';
+    let pendingBreak = false;
+    const emitText = (t: string): void => {
+      if (t === '') return;
+      if (pendingBreak && tail !== '' && !tail.endsWith('\n\n')) {
+        const sep = tail.endsWith('\n') ? '\n' : '\n\n';
+        req.emit({ type: 'text.delta', text: sep });
+        tail += sep;
+      }
+      pendingBreak = false;
+      tail = (tail + t).slice(-2);
+      req.emit({ type: 'text.delta', text: t });
+    };
     let stderr = '';
 
     const child = spawn(o.bin, args, { cwd: o.cwd, env: childEnv(), stdio: ['pipe', 'pipe', 'pipe'], shell: false });
@@ -220,10 +234,11 @@ export class ClaudeCliProvider implements Provider {
       }
       if (ev.type === 'stream_event') {
         const inner = ev.event as { type?: string; delta?: { type?: string; text?: string; thinking?: string } } | undefined;
+        if (inner?.type === 'content_block_start' || inner?.type === 'message_start') pendingBreak = true;
         if (inner?.type === 'content_block_delta') {
           if (inner.delta?.type === 'text_delta' && typeof inner.delta.text === 'string') {
             sawDeltas = true;
-            req.emit({ type: 'text.delta', text: inner.delta.text });
+            emitText(inner.delta.text);
           } else if (inner.delta?.type === 'thinking_delta' && typeof inner.delta.thinking === 'string') {
             req.emit({ type: 'thinking.delta', text: inner.delta.thinking });
           }
@@ -235,7 +250,10 @@ export class ClaudeCliProvider implements Provider {
         const content = (ev.message as { content?: unknown } | undefined)?.content;
         if (Array.isArray(content)) {
           for (const c of content as { type?: string; text?: string }[]) {
-            if (c.type === 'text' && typeof c.text === 'string') req.emit({ type: 'text.delta', text: c.text });
+            if (c.type === 'text' && typeof c.text === 'string') {
+              pendingBreak = true;
+              emitText(c.text);
+            }
           }
         }
         return;
