@@ -4,7 +4,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { parseRule } from './policy/rules.ts';
 
 export const BRIDGE_NAME = 'logseq-ai-bridge';
-export const BRIDGE_VERSION = '0.7.0';
+export const BRIDGE_VERSION = '0.8.0';
 export const DEFAULT_PORT = 47615;
 export const MIN_NODE_MAJOR = 26;
 
@@ -48,6 +48,11 @@ export type BridgeConfig = {
   cliConcurrency: number;
   /** Pass --restricted to claude (no user/project settings, no code tools). Default true. */
   claudeRestricted: boolean;
+  /**
+   * Allow Claude's web search when you switch it on for a message (🌐 in the panel).
+   * Only searching: claude can't open pages (WebFetch stays off). Default true; false hides the button.
+   */
+  webSearch: boolean;
   policy: PolicyConfig;
 };
 
@@ -114,6 +119,7 @@ export function defaultConfig(): BridgeConfig {
     cliTimeoutMs: 15000,
     cliConcurrency: 2,
     claudeRestricted: true,
+    webSearch: true,
     policy: { deny: [], allow: [] },
   };
 }
@@ -209,6 +215,10 @@ export function mergeConfig(base: BridgeConfig, raw: unknown): BridgeConfig {
       throw new Error(`config.json: "${key}" must be a positive integer`);
     }
     out[key] = v;
+  }
+  if (input.webSearch !== undefined) {
+    if (typeof input.webSearch !== 'boolean') throw new Error('config.json: "webSearch" must be true or false');
+    out.webSearch = input.webSearch;
   }
   if (input.claudeRestricted !== undefined) {
     if (typeof input.claudeRestricted !== 'boolean') throw new Error('config.json: "claudeRestricted" must be true or false');

@@ -26,6 +26,8 @@ export type SendInput = {
   model: string;
   effort: Effort;
   context: { pageUuid?: string; blockUuids?: string[] };
+  /** Let the model search the web for this message. */
+  web?: boolean;
 };
 
 export class BridgeClient {

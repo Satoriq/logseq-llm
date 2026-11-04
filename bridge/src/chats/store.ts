@@ -26,6 +26,8 @@ export type MessageMeta = {
   sentUuids?: string[];
   /** Context the user attached (UUIDs only). */
   contextUuids?: string[];
+  /** Web search was on for this message. */
+  web?: boolean;
 };
 
 export type StoredMessage = {

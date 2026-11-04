@@ -11,7 +11,7 @@ import type { BridgeEvent, ChatMeta, Effort, EditorPort, ProviderInfo, StoredMes
  * plain browser page.
  */
 
-export type Prefs = { provider?: string; model?: string; effort?: Effort; chatId?: string; includePage?: boolean };
+export type Prefs = { provider?: string; model?: string; effort?: Effort; chatId?: string; includePage?: boolean; web?: boolean };
 
 export type PanelDeps = {
   doc: Document;
@@ -61,6 +61,7 @@ export class Panel {
     foot: HTMLElement;
     instrBtn: HTMLButtonElement;
     chips: HTMLElement;
+    web: HTMLButtonElement;
     input: HTMLTextAreaElement;
     send: HTMLButtonElement;
     stop: HTMLButtonElement;
@@ -159,10 +160,15 @@ export class Panel {
     });
     const actions = this.#h('div', 'lsai-actions');
     const hint = this.#h('span', 'lsai-hint', 'Enter to send · Shift+Enter for a new line');
+    const web = this.#button('lsai-icon lsai-web', '🌐', '', () => {
+      this.#d.prefs.set({ web: !web.classList.contains('lsai-on') });
+      this.#updateWeb();
+    });
+    web.hidden = true;
     const send = this.#button('lsai-send', 'Send', 'Send (Enter)', () => void this.send());
     const stop = this.#button('lsai-stop', 'Stop', 'Stop the reply', () => void this.#stop());
     stop.hidden = true;
-    actions.append(hint, stop, send);
+    actions.append(hint, web, stop, send);
     foot.append(chips, input, actions);
 
     // Typing in the panel must not trigger Logseq's keyboard shortcuts.
@@ -171,7 +177,7 @@ export class Panel {
     }
 
     this.root.append(head, log, foot);
-    this.#els = { status, chatSelect, provider, model, effort, log, foot, instrBtn, chips, input, send, stop };
+    this.#els = { status, chatSelect, provider, model, effort, log, foot, instrBtn, chips, web, input, send, stop };
     this.#renderChips();
   }
 
@@ -420,7 +426,19 @@ export class Panel {
     this.#fillModels();
   }
 
+  /** 🌐 shows only for providers that can search; on/off is remembered. */
+  #updateWeb(): void {
+    const { web, provider } = this.#els;
+    const can = this.#providers.find((x) => x.id === provider.value)?.webSearch === true;
+    const on = can && this.#d.prefs.get().web === true;
+    web.hidden = !can;
+    web.classList.toggle('lsai-on', on);
+    web.setAttribute('aria-pressed', String(on));
+    web.title = on ? 'Web search is on: Claude may search the internet for your messages. Click to turn off.' : 'Web search is off. Click to let Claude search the internet.';
+  }
+
   #fillModels(): void {
+    this.#updateWeb();
     const { provider, model } = this.#els;
     const p = this.#providers.find((x) => x.id === provider.value);
     model.replaceChildren();
@@ -563,6 +581,7 @@ export class Panel {
           ...(includePage && this.#page ? { pageUuid: this.#page.uuid } : {}),
           blockUuids: [...this.#pinned.keys()],
         },
+        ...(!this.#els.web.hidden && this.#els.web.classList.contains('lsai-on') ? { web: true } : {}),
       });
     } catch (err) {
       this.#setBusy(false);
@@ -640,7 +659,7 @@ export class Panel {
         this.#setBusy(true);
         const live = this.#ensureLive(ev.turnId);
         const meta = live.root.querySelector('.lsai-meta');
-        if (meta) meta.textContent = [ev.data.provider, ev.data.model, ev.data.locality === 'cloud' ? 'cloud' : 'local'].filter(Boolean).join(' · ');
+        if (meta) meta.textContent = [ev.data.provider, ev.data.model, ev.data.locality === 'cloud' ? 'cloud' : 'local', ev.data.web === true ? '🌐 web' : ''].filter(Boolean).join(' · ');
         break;
       }
       case 'text.delta': {

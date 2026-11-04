@@ -3,6 +3,7 @@ import { loadOrCreateTokens, rotateTokens } from '../src/auth.ts';
 import { AuditLog } from '../src/audit.ts';
 import { BRIDGE_NAME, BRIDGE_VERSION, dataPaths, defaultDataDir, ensureDataDirs, loadConfig, MIN_NODE_MAJOR } from '../src/config.ts';
 import { buildGraph, createRuntime } from '../src/app.ts';
+import { defaultAgentDeps, runAgent } from '../src/agent.ts';
 import { checkClaude } from '../src/check-claude.ts';
 import { runDoctor } from '../src/doctor.ts';
 import { shutdown } from '../src/http/server.ts';
@@ -15,11 +16,14 @@ const USAGE = `${BRIDGE_NAME} ${BRIDGE_VERSION}
 Usage:
   node bin/logseq-ai-bridge.ts start [--port <n>]
   node bin/logseq-ai-bridge.ts doctor [--sample-page "<title>"] [--sample-search "<text>"]
-  node bin/logseq-ai-bridge.ts check-claude [--page "<title>"] [--model sonnet] [--effort low]
-                                               one real claude turn through the bridge (uses a little Pro usage)
+  node bin/logseq-ai-bridge.ts check-claude [--page "<title>"] [--model sonnet] [--effort low] [--web]
+                                               one real claude turn through the bridge (uses a little Pro usage);
+                                               --web tests web search instead of the graph tools
   node bin/logseq-ai-bridge.ts tools          list the graph tools models get
   node bin/logseq-ai-bridge.ts tool <name> ['<json args>'] [--as cloud|local]
                                                run one tool and print exactly what a model would see
+  node bin/logseq-ai-bridge.ts agent install|restart|status|uninstall
+                                               macOS: start the bridge at login (and after a crash)
   node bin/logseq-ai-bridge.ts token          print the plugin token (paste it into the plugin settings)
   node bin/logseq-ai-bridge.ts rotate-token   make new tokens (the old ones stop working)
 
@@ -80,7 +84,13 @@ async function main(): Promise<void> {
     if (!CLAUDE_MODELS.some((m) => m.id === model)) throw new Error(`--model must be one of ${CLAUDE_MODELS.map((m) => m.id).join(', ')}`);
     const effort = flag(args, '--effort') ?? 'low';
     if (!isEffort(effort) || effort === 'off') throw new Error('--effort must be auto, low, medium, high, xhigh or max');
-    const ok = await checkClaude({ config, paths, page: flag(args, '--page') ?? 'AI Test', model, effort });
+    const ok = await checkClaude({ config, paths, page: flag(args, '--page') ?? 'AI Test', model, effort, web: args.includes('--web') });
+    process.exitCode = ok ? 0 : 1;
+    return;
+  }
+
+  if (cmd === 'agent') {
+    const ok = await runAgent(args[0] ?? '', defaultAgentDeps({ dataDir: paths.root, logDir: paths.logs, port: config.port }));
     process.exitCode = ok ? 0 : 1;
     return;
   }
@@ -132,7 +142,15 @@ async function main(): Promise<void> {
     if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('--port must be 1024-65535');
     const tokens = await loadOrCreateTokens(paths.tokens);
     const { server, turns, listen } = await createRuntime({ config, paths, tokens });
-    const actual = await listen(port);
+    let actual: number;
+    try {
+      actual = await listen(port);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw err;
+      process.stderr.write(`${BRIDGE_NAME}: port ${port} is already in use (another bridge running?).\n`);
+      // Under the login agent, exit "successfully" so launchd doesn't retry every 10 s.
+      process.exit(process.env.LOGSEQ_AI_AGENT === '1' ? 0 : 1);
+    }
     log.info(`${BRIDGE_NAME} ${BRIDGE_VERSION} listening on http://127.0.0.1:${actual}`, {
       dataDir: paths.root,
       allowedOrigins: config.allowedOrigins,

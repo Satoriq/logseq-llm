@@ -57,6 +57,7 @@ type Settings = {
   prefEffort?: string;
   prefChatId?: string;
   prefIncludePage?: boolean;
+  prefWeb?: boolean;
 };
 
 const CONNECTION_KEYS = ['bridgeUrl', 'bridgeToken'] as const;
@@ -145,6 +146,7 @@ export async function main(): Promise<void> {
         ...(s.prefEffort ? { effort: s.prefEffort as Effort } : {}),
         ...(s.prefChatId ? { chatId: s.prefChatId } : {}),
         includePage: s.prefIncludePage !== false,
+        web: s.prefWeb === true,
       };
     },
     set: (p: Partial<Prefs>): void => {
@@ -154,6 +156,7 @@ export async function main(): Promise<void> {
       if (p.effort !== undefined) patch.prefEffort = p.effort;
       if (p.chatId !== undefined) patch.prefChatId = p.chatId;
       if (p.includePage !== undefined) patch.prefIncludePage = p.includePage;
+      if (p.web !== undefined) patch.prefWeb = p.web;
       logseq.updateSettings(patch);
     },
   };

@@ -43,6 +43,8 @@ export type ClaudeCliOptions = {
   systemPrompt: () => Promise<string>;
   /** --restricted (default true). Turn off only if your claude version rejects it. */
   restricted: boolean;
+  /** Offer web search (WebSearch only, never WebFetch) when the user asks for it. */
+  webSearch?: boolean;
   /** Renders the page/selection the user attached, filtered for cloud. */
   renderContext: (uuids: string[], chatId: string, turnId: string) => Promise<string>;
   turnTimeoutMs: number;
@@ -59,6 +61,8 @@ export function claudeArgs(o: {
   sessionId: string;
   resume: boolean;
   restricted: boolean;
+  /** Turn on claude's WebSearch tool (and only that built-in tool) for this turn. */
+  web?: boolean;
 }): string[] {
   const args = [
     '-p',
@@ -67,7 +71,8 @@ export function claudeArgs(o: {
     '--output-format', 'stream-json',
     '--include-partial-messages',
     ...(o.restricted ? ['--restricted'] : []),
-    '--tools', '',
+    // No built-in tools, except WebSearch when you turned it on. Never WebFetch, Bash, files...
+    '--tools', o.web ? WEB_TOOL : '',
     '--strict-mcp-config',
     '--mcp-config', o.mcpConfigPath,
     '--allowedTools', o.allowedTools.join(','),
@@ -104,21 +109,30 @@ function handoff(messages: StoredMessage[]): string {
 
 type ClaudeEvent = Record<string, unknown> & { type?: string; subtype?: string };
 
-/** "Today is Tuesday 2026-11-03, 14:05 local time." — for "due this week" and date properties. */
-export function todayLine(now = new Date()): string {
+/** claude's built-in search tool. The only built-in tool the bridge ever turns on. */
+export const WEB_TOOL = 'WebSearch';
+
+/**
+ * First line of every turn: today's date (for "due this week" and date properties) and
+ * whether web search is on, e.g. "(Today is Tuesday 2026-11-03, 14:05 local time. Web search: off.)"
+ */
+export function todayLine(now = new Date(), web = false): string {
   const p = (n: number): string => String(n).padStart(2, '0');
   const day = now.toLocaleDateString('en-US', { weekday: 'long' });
-  return `(Today is ${day} ${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}, ${p(now.getHours())}:${p(now.getMinutes())} local time.)`;
+  const date = `${day} ${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}, ${p(now.getHours())}:${p(now.getMinutes())} local time`;
+  return `(Today is ${date}. Web search: ${web ? 'on for this message' : 'off; the user can turn it on with the 🌐 button'}.)`;
 }
 
 export class ClaudeCliProvider implements Provider {
   readonly id = 'claude';
   readonly label = 'Claude (Pro, claude CLI)';
   readonly locality = 'cloud' as const;
+  readonly webSearch: boolean;
   #o: ClaudeCliOptions;
 
   constructor(opts: ClaudeCliOptions) {
     this.#o = opts;
+    this.webSearch = opts.webSearch === true;
   }
 
   async models(): Promise<ModelInfo[]> {
@@ -127,6 +141,7 @@ export class ClaudeCliProvider implements Provider {
 
   async runTurn(req: TurnRequest): Promise<TurnResult> {
     const o = this.#o;
+    const web = req.web && this.webSearch;
     const meta = await o.store.get(req.chatId);
     const resume = meta?.claudeSessionId !== undefined;
     const sessionId = meta?.claudeSessionId ?? randomUUID();
@@ -135,7 +150,7 @@ export class ClaudeCliProvider implements Provider {
     const contextUuids = last?.meta?.contextUuids ?? [];
     const context = contextUuids.length > 0 ? await o.renderContext(contextUuids, req.chatId, req.turnId) : '';
     const prompt =
-      `${todayLine()}\n\n` +
+      `${todayLine(new Date(), web)}\n\n` +
       (resume ? '' : handoff(req.messages)) +
       (context ? `The user has this open in Logseq (filtered by their privacy settings):\n<context>\n${context}\n</context>\n\n` : '') +
       (last ? messageText(last) : '');
@@ -146,6 +161,7 @@ export class ClaudeCliProvider implements Provider {
     await writeFile(systemPromptFile, await o.systemPrompt(), { mode: 0o600 });
     const toolNames = o.toolNames();
     const expectedTools = new Set(toolNames.map((n) => `mcp__${MCP_SERVER_NAME}__${n}`));
+    if (web) expectedTools.add(WEB_TOOL);
     await writeFile(
       mcpConfigPath,
       JSON.stringify({
@@ -170,11 +186,13 @@ export class ClaudeCliProvider implements Provider {
       sessionId,
       resume,
       restricted: o.restricted,
+      web,
     });
 
     let failure: string | null = null;
     let result: ClaudeEvent | null = null;
     let sawDeltas = false;
+    const webCalls = new Set<string>();
     // Text before and after a tool call arrives as separate blocks; keep them apart in the reply.
     let tail = '';
     let pendingBreak = false;
@@ -245,15 +263,28 @@ export class ClaudeCliProvider implements Provider {
         }
         return;
       }
-      if (ev.type === 'assistant' && !sawDeltas) {
-        // Fallback when partial messages are not streamed.
+      if (ev.type === 'assistant') {
         const content = (ev.message as { content?: unknown } | undefined)?.content;
-        if (Array.isArray(content)) {
-          for (const c of content as { type?: string; text?: string }[]) {
-            if (c.type === 'text' && typeof c.text === 'string') {
-              pendingBreak = true;
-              emitText(c.text);
-            }
+        for (const c of Array.isArray(content) ? (content as { type?: string; text?: string; id?: string; name?: string; input?: { query?: unknown } }[]) : []) {
+          // Web searches show as steps, like the Logseq tools (those report through /mcp).
+          if (c.type === 'tool_use' && c.name === WEB_TOOL && typeof c.id === 'string' && !webCalls.has(c.id)) {
+            webCalls.add(c.id);
+            const q = typeof c.input?.query === 'string' ? c.input.query.replace(/\s+/g, ' ').trim() : '';
+            req.emit({ type: 'tool.start', callId: c.id, name: 'web_search', label: `searching the web${q ? `: "${q.length > 80 ? `${q.slice(0, 80)}…` : q}"` : ''}` });
+          }
+          // Fallback when partial messages are not streamed.
+          if (!sawDeltas && c.type === 'text' && typeof c.text === 'string') {
+            pendingBreak = true;
+            emitText(c.text);
+          }
+        }
+        return;
+      }
+      if (ev.type === 'user') {
+        const content = (ev.message as { content?: unknown } | undefined)?.content;
+        for (const c of Array.isArray(content) ? (content as { type?: string; tool_use_id?: string; is_error?: boolean }[]) : []) {
+          if (c.type === 'tool_result' && typeof c.tool_use_id === 'string' && webCalls.delete(c.tool_use_id)) {
+            req.emit({ type: 'tool.end', callId: c.tool_use_id, ok: c.is_error !== true, summary: c.is_error === true ? 'search failed' : 'done' });
           }
         }
         return;

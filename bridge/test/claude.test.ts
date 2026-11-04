@@ -51,7 +51,7 @@ after(async () => {
   await shutdown(rt.server);
 });
 
-async function turn(chatId: string, text: string, opts: { provider?: string; context?: string[] } = {}): Promise<BridgeEvent[]> {
+async function turn(chatId: string, text: string, opts: { provider?: string; context?: string[]; web?: boolean } = {}): Promise<BridgeEvent[]> {
   const events: BridgeEvent[] = [];
   const off = rt.turns.eventLog(chatId).subscribe((e) => events.push(e));
   const providerId = opts.provider ?? 'claude';
@@ -62,6 +62,7 @@ async function turn(chatId: string, text: string, opts: { provider?: string; con
     model: isClaude ? 'sonnet' : 'echo',
     effort: isClaude ? 'medium' : 'auto',
     contextUuids: opts.context ?? [],
+    ...(opts.web ? { web: true } : {}),
   });
   await done;
   off();
@@ -119,7 +120,7 @@ test('claude turn: exact flags, filtered tools over MCP, session saved, nothing 
   const argv2 = JSON.parse(await fakeFile('fake-claude-argv.json')) as string[];
   assert.equal(argv2[argv2.indexOf('--resume') + 1], sessionId);
   // A resumed turn sends only the date line and the new message (claude keeps the history).
-  assert.match(await fakeFile('fake-claude-prompt.txt'), /^\(Today is \w+ \d{4}-\d{2}-\d{2}, \d{2}:\d{2} local time\.\)\n\nagain$/);
+  assert.match(await fakeFile('fake-claude-prompt.txt'), /^\(Today is \w+ \d{4}-\d{2}-\d{2}, \d{2}:\d{2} local time\. Web search: off; [^)]*\.\)\n\nagain$/);
 });
 
 function mcpStatus(authorization: string | undefined, extra: Record<string, string> = {}): Promise<number> {
@@ -272,4 +273,36 @@ test('text before and after a tool call stays apart (no "pages.Done")', async ()
   assert.equal(textOf(events), 'I will create the pages.\n\nDone: 10 pages.');
   const stored = (await rt.store.messages(chat.id)).at(-1);
   assert.match(JSON.stringify(stored?.parts), /pages\.\\n\\nDone/);
+});
+
+test('web search: only WebSearch, only when asked for the message; shown as a step, logged without the query', async () => {
+  const chat = await rt.store.create('web');
+  // Off: no built-in tools at all.
+  let events = await turn(chat.id, 'FAKE:web what is new?');
+  assert.match(textOf(events), /web=unavailable/);
+  let argv = JSON.parse(await fakeFile('fake-claude-argv.json')) as string[];
+  assert.equal(argv[argv.indexOf('--tools') + 1], '');
+  assert.ok(!argv[argv.indexOf('--allowedTools') + 1]?.includes('WebSearch'));
+  assert.match(await fakeFile('fake-claude-prompt.txt'), /Web search: off/);
+
+  // On: WebSearch and nothing else built in; never WebFetch.
+  events = await turn(chat.id, 'FAKE:web what is new?', { web: true });
+  assert.match(textOf(events), /web=searched/);
+  argv = JSON.parse(await fakeFile('fake-claude-argv.json')) as string[];
+  assert.equal(argv[argv.indexOf('--tools') + 1], 'WebSearch');
+  const allowed = argv[argv.indexOf('--allowedTools') + 1]?.split(',') ?? [];
+  assert.ok(allowed.includes('WebSearch'));
+  assert.ok(!allowed.some((t) => /WebFetch|Bash/.test(t)));
+  assert.match(await fakeFile('fake-claude-prompt.txt'), /Web search: on for this message/);
+  const start = events.find((e) => e.type === 'tool.start' && e.data.name === 'web_search');
+  assert.equal(start?.data.label, 'searching the web: "latest Logseq release"');
+  assert.ok(events.some((e) => e.type === 'tool.end' && e.data.callId === 'toolu_web1' && e.data.ok === true));
+  assert.equal((await rt.store.messages(chat.id)).filter((m) => m.role === 'user').at(-1)?.meta?.web, true);
+
+  const audit = await readFile(paths.audit, 'utf8');
+  assert.match(audit, /"tool":"web_search"/);
+  assert.ok(!audit.includes('latest Logseq release'), 'queries are not logged');
+
+  // Providers that can't search refuse it instead of silently ignoring it.
+  await assert.rejects(rt.turns.start(chat.id, { text: 'x', providerId: 'echo', model: 'echo', effort: 'auto', contextUuids: [], web: true }), /web search isn't available/);
 });

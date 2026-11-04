@@ -119,6 +119,7 @@ export async function createRuntime(opts: { config: BridgeConfig; paths: DataPat
     store,
     systemPrompt: () => instructions.systemPrompt(),
     restricted: config.claudeRestricted,
+    webSearch: config.webSearch,
     renderContext,
     turnTimeoutMs: 15 * 60_000,
   });

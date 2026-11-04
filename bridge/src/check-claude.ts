@@ -16,6 +16,8 @@ export async function checkClaude(opts: {
   page: string;
   model: string;
   effort: Effort;
+  /** Test web search instead of the graph tools. */
+  web?: boolean;
   out?: (line: string) => void;
 }): Promise<boolean> {
   const out = opts.out ?? ((l: string) => process.stdout.write(l + '\n'));
@@ -31,6 +33,7 @@ export async function checkClaude(opts: {
     sessionId: '<new uuid>',
     resume: false,
     restricted: opts.config.claudeRestricted,
+    web: opts.web === true,
   });
   out(`bridge (temporary) on 127.0.0.1:${port}`);
   out(`command: ${opts.config.claudeBin} ${preview.map((a) => (a === '' ? '""' : /\s/.test(a) ? JSON.stringify(a) : a)).join(' ')}`);
@@ -46,11 +49,14 @@ export async function checkClaude(opts: {
   });
   const started = Date.now();
   const { done } = await rt.turns.start(chat.id, {
-    text: `Use the get_page tool to read the page "${opts.page}". Then reply with only the number of top-level blocks you can see, as digits.`,
+    text: opts.web
+      ? 'Search the web for the latest Logseq desktop release. Reply with its version number and the link you found it at, nothing else.'
+      : `Use the get_page tool to read the page "${opts.page}". Then reply with only the number of top-level blocks you can see, as digits.`,
     providerId: 'claude',
     model: opts.model,
     effort: opts.effort,
     contextUuids: [],
+    ...(opts.web ? { web: true } : {}),
   });
   await done;
   const text = events.filter((e) => e.type === 'text.delta').map((e) => String(e.data.text)).join('');

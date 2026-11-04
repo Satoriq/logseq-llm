@@ -12,6 +12,8 @@ export type StartTurnInput = {
   effort: Effort;
   /** UUIDs of the current page / selected blocks. Only ids: the bridge reads content itself. */
   contextUuids: string[];
+  /** Web search on for this message. Refused for providers that can't search. */
+  web?: boolean;
 };
 
 export class TurnError extends Error {
@@ -76,6 +78,8 @@ export class TurnRunner {
     const models = await provider.models();
     const model = models.find((m) => m.id === (input.model ?? models[0]?.id));
     if (!model) throw new TurnError(400, `unknown model "${input.model ?? ''}" for provider "${provider.id}"`);
+    const web = input.web === true;
+    if (web && !provider.webSearch) throw new TurnError(400, `web search isn't available for ${provider.label}`);
     if (!model.efforts.includes(input.effort)) {
       throw new TurnError(400, `effort "${input.effort}" is not supported by ${model.id}`);
     }
@@ -89,7 +93,7 @@ export class TurnRunner {
       await this.#store.append(chatId, {
         role: 'user',
         parts: [{ type: 'text', text: input.text }],
-        meta: { turnId, contextUuids: input.contextUuids },
+        meta: { turnId, contextUuids: input.contextUuids, ...(web ? { web: true } : {}) },
       });
       await this.#store.update(chatId, { provider: provider.id, model: model.id, effort: input.effort });
     } catch (err) {
@@ -97,7 +101,7 @@ export class TurnRunner {
       throw err;
     }
 
-    events.append('turn.start', { provider: provider.id, model: model.id, effort: input.effort, locality: provider.locality }, turnId);
+    events.append('turn.start', { provider: provider.id, model: model.id, effort: input.effort, locality: provider.locality, web }, turnId);
     await this.#audit.record({
       kind: 'turn.start',
       chatId,
@@ -107,9 +111,10 @@ export class TurnRunner {
       effort: input.effort,
       locality: provider.locality,
       sentUuids: [],
+      ...(web ? { web: true } : {}),
     });
 
-    const done = this.#run(chatId, turnId, provider, model.id, input.effort, controller, events);
+    const done = this.#run(chatId, turnId, provider, model.id, input.effort, web, controller, events);
     return { turnId, done };
   }
 
@@ -131,6 +136,7 @@ export class TurnRunner {
     provider: Provider,
     modelId: string,
     effort: Effort,
+    web: boolean,
     controller: AbortController,
     events: EventLog,
   ): Promise<void> {
@@ -142,10 +148,12 @@ export class TurnRunner {
       const emit = (ev: ProviderEvent): void => {
         if (controller.signal.aborted) return;
         if (ev.type === 'text.delta') text += ev.text;
+        // Web searches are logged as having happened, never with the query.
+        if (ev.type === 'tool.start' && ev.name === 'web_search') void this.#audit.record({ kind: 'tool', chatId, turnId, tool: 'web_search', locality: provider.locality });
         const { type, ...data } = ev;
         events.append(type, data as Record<string, unknown>, turnId);
       };
-      const result = await provider.runTurn({ chatId, turnId, messages, model: modelId, effort, signal: controller.signal, emit });
+      const result = await provider.runTurn({ chatId, turnId, messages, model: modelId, effort, web, signal: controller.signal, emit });
       stopReason = controller.signal.aborted ? 'cancelled' : result.stopReason;
       usage = result.usage;
       if (result.stopReason === 'error') {

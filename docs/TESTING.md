@@ -691,12 +691,66 @@ cat "$HOME/Library/Application Support/logseq-ai/instructions.md"
 
 Clearing the text and saving deletes the file.
 
+### 4g. Web search
+
+Update as in 4f. The status line should show `panel 0.6.0 · bridge 0.8.0`.
+
+```bash
+node bin/logseq-ai-bridge.ts check-claude --web
+```
+
+Expected: a `tool:   searching the web: …` line, an answer with a version and a
+link, and `check-claude: OK`.
+
+In the panel (Claude selected):
+1. There's a grey **🌐** next to Send. It's off.
+2. Ask *"What's new in the latest Logseq release?"* Claude says it can't search
+   right now and answers from memory, saying so.
+3. Click 🌐 (it turns colored) and ask again. The reply shows
+   `✓ searching the web: "…"`, its header says `🌐 web`, and it names its links.
+   🌐 stays on for the next messages until you click it off.
+
+Claude can only search; it can't open web pages. The audit log records that a
+search happened, but not what was searched. To remove the button completely, add
+`"webSearch": false` to config.json and restart the bridge.
+
+### 4h. Start the bridge at login
+
+1. Stop the bridge in Terminal (Ctrl-C).
+2. Install the agent:
+
+```bash
+cd "/Users/lol/Chrome/logseq AI/logseq-llm/bridge" && node bin/logseq-ai-bridge.ts agent install
+```
+
+   Expected: `agent: the bridge is running on port 47615 and will start at every
+   login.` macOS may show "Background Items Added": that's this agent (listed
+   as `node` in System Settings → General → Login Items). Leave it allowed.
+3. In Logseq the panel connects as before, with no Terminal window open.
+4. After every `git pull`:
+
+```bash
+node bin/logseq-ai-bridge.ts agent restart
+```
+
+5. To check on it, or see the last log lines:
+
+```bash
+node bin/logseq-ai-bridge.ts agent status
+```
+
+6. To go back to starting it yourself:
+
+```bash
+node bin/logseq-ai-bridge.ts agent uninstall
+```
+
 ### Which build is running?
 
-The panel's status line shows `● Connected · panel 0.5.1 · bridge 0.7.0`. If
+The panel's status line shows `● Connected · panel 0.6.0 · bridge 0.8.0`. If
 it shows no version numbers, Logseq still runs an old plugin build. Run
 `npm run build` in `plugin/`, then switch the plugin off and on. Approval cards
-need panel ≥ 0.2.0; batched edits need 0.3.0; Apply all, Abort and folding need 0.4.0; the ✎ instructions editor needs 0.5.0 and bridge 0.7.0.
+need panel ≥ 0.2.0; batched edits need 0.3.0; Apply all, Abort and folding need 0.4.0; the ✎ instructions editor needs 0.5.0 and bridge 0.7.0; 🌐 web search needs 0.6.0 and bridge 0.8.0.
 
 If a write needs your approval and no up-to-date panel is open on that chat,
 the bridge doesn't wait. It tells Claude right away that nothing was changed,

@@ -285,3 +285,8 @@ html.is-mac #lsai-panel.lsai-side-left .lsai-head { padding-top: 40px; }
   color: var(--lsai-fg);
 }
 #lsai-panel .lsai-btn2:hover { background: var(--lsai-bg2); }
+
+/* 🌐 web search toggle: grey when off. */
+#lsai-panel .lsai-web { font-size: 15px; filter: grayscale(1); opacity: .5; }
+#lsai-panel .lsai-web:hover { opacity: .8; }
+#lsai-panel .lsai-web.lsai-on { filter: none; opacity: 1; }

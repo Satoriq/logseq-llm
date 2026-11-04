@@ -4,7 +4,7 @@ export type Effort = 'auto' | 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max
 export type Locality = 'local' | 'cloud';
 
 export type ModelInfo = { id: string; label: string; efforts: Effort[] };
-export type ProviderInfo = { id: string; label: string; locality: Locality; models: ModelInfo[] };
+export type ProviderInfo = { id: string; label: string; locality: Locality; models: ModelInfo[]; webSearch?: boolean };
 
 export type ChatMeta = { id: string; title: string; createdAt: number; updatedAt: number; provider?: string; model?: string; effort?: string };
 

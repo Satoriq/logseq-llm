@@ -247,7 +247,7 @@ export function createBridgeServer(deps: ServerDeps): Server {
       requireScope(scope, 'plugin');
       const list = [];
       for (const p of deps.turns.providers()) {
-        list.push({ id: p.id, label: p.label, locality: p.locality, models: await p.models() });
+        list.push({ id: p.id, label: p.label, locality: p.locality, webSearch: p.webSearch === true, models: await p.models() });
       }
       send(res, 200, { providers: list }, cors);
       return;
@@ -325,12 +325,14 @@ export function createBridgeServer(deps: ServerDeps): Server {
         const effort = body.effort ?? 'auto';
         if (!isEffort(effort)) throw new HttpError(400, '"effort" is not a known level');
         const model = optionalString(body, 'model', 128);
+        if (body.web !== undefined && typeof body.web !== 'boolean') throw new HttpError(400, '"web" must be true or false');
         const { turnId } = await deps.turns.start(id, {
           text,
           providerId,
           effort,
           contextUuids: parseContext(body),
           ...(model !== undefined ? { model } : {}),
+          ...(body.web === true ? { web: true } : {}),
         });
         send(res, 202, { turnId }, cors);
         return;

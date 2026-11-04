@@ -21,6 +21,8 @@ export type AuditEntry = {
   outcome?: string;
   /** Blocks/pages a write touched (ids only). */
   targetUuids?: string[];
+  /** Web search was on for the turn (queries are not logged). */
+  web?: boolean;
 };
 
 export class AuditLog {

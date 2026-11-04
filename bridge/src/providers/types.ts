@@ -29,6 +29,8 @@ export type TurnRequest = {
   messages: StoredMessage[];
   model: string;
   effort: Effort;
+  /** The user turned web search on for this message (only for providers with webSearch). */
+  web: boolean;
   signal: AbortSignal;
   emit: (ev: ProviderEvent) => void;
 };
@@ -44,6 +46,8 @@ export interface Provider {
   readonly label: string;
   /** 'cloud' means content leaves the Mac. Drives the privacy filter and consent cards. */
   readonly locality: Locality;
+  /** Can search the web when the user asks for it (per message). */
+  readonly webSearch?: boolean;
   models(): Promise<ModelInfo[]>;
   runTurn(req: TurnRequest): Promise<TurnResult>;
 }

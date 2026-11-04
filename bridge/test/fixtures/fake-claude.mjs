@@ -79,6 +79,16 @@ if (prompt.includes('FAKE:error')) {
   out({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'boom', session_id: session });
   process.exit(1);
 }
+if (prompt.includes('FAKE:web')) {
+  // claude's built-in WebSearch, as stream-json reports it. Only possible if --tools turned it on.
+  if (get('--tools') !== 'WebSearch') {
+    text += ' web=unavailable';
+  } else {
+    out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_web1', name: 'WebSearch', input: { query: 'latest Logseq release' } }] } });
+    out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_web1', content: 'Logseq 2.0.2 https://github.com/logseq/logseq/releases' }] } });
+    text += ' web=searched';
+  }
+}
 if (prompt.includes('FAKE:split')) {
   // Like real claude: a text block, a tool call, then a new message with another text block.
   const delta = (t) => out({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: t } } });
