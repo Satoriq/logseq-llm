@@ -673,10 +673,10 @@ to config.json; `"off"` sends not even the names.
 ### 4f. Your instructions
 
 Update: `git pull`, `npm run build` in `plugin/`, restart the bridge, and switch the
-plugin off and on. The status line should show `panel 0.5.0 · bridge 0.7.0`.
+plugin off and on. The status line should show `panel 0.5.1 · bridge 0.7.0`.
 
 1. Click **✎** in the panel header. The chat is replaced by "Your instructions".
-2. Write, for example: *"Answer in Russian, short. When you summarize a page, use
+2. Write, for example: *"Answer in Ukrainian, short. When you summarize a page, use
    bullet points."* Save with the button or ⌘S. It says "Saved. Used from your
    next message."
 3. Close (or Esc), then ask something in any chat, an existing one too. The reply
@@ -693,7 +693,7 @@ Clearing the text and saving deletes the file.
 
 ### Which build is running?
 
-The panel's status line shows `● Connected · panel 0.5.0 · bridge 0.7.0`. If
+The panel's status line shows `● Connected · panel 0.5.1 · bridge 0.7.0`. If
 it shows no version numbers, Logseq still runs an old plugin build. Run
 `npm run build` in `plugin/`, then switch the plugin off and on. Approval cards
 need panel ≥ 0.2.0; batched edits need 0.3.0; Apply all, Abort and folding need 0.4.0; the ✎ instructions editor needs 0.5.0 and bridge 0.7.0.

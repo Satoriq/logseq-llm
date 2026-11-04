@@ -1,6 +1,6 @@
 import { BridgeError } from './bridge';
 import type { BridgeClient, ConnState } from './bridge';
-import { ChangeCards } from './changes';
+import { ChangeCards, COLLAPSE_MS } from './changes';
 import { renderMarkdown } from './render';
 import { PANEL_VERSION } from './version';
 import type { BridgeEvent, ChatMeta, Effort, EditorPort, ProviderInfo, StoredMessage } from './types';
@@ -36,7 +36,12 @@ type Live = {
   turnId: string | undefined;
   root: HTMLElement;
   body: HTMLElement;
+  /** Tool steps: a group that folds to "N steps · ✓ N" once the reply is done. */
   steps: HTMLElement;
+  stepsHead: HTMLButtonElement;
+  stepsBody: HTMLElement;
+  /** You opened or closed the steps yourself: don't fold them for you. */
+  stepsTouched: boolean;
   dots: HTMLElement;
   text: string;
   stepRows: Map<string, HTMLElement>;
@@ -192,7 +197,7 @@ export class Panel {
     text.rows = 12;
     text.spellcheck = true;
     text.placeholder =
-      'For example:\n- Answer in Russian, short and to the point.\n- I am a product manager; projects are pages tagged #project.\n' +
+      'For example:\n- Answer in Ukrainian, short and to the point.\n- I am a product manager; projects are pages tagged #project.\n' +
       '- Put summaries at the top of a page, as bullet points.\n- Ask before rewriting more than a few blocks.';
     const count = this.#h('span', 'lsai-hint');
     const builtIn = this.#h('details', 'lsai-instr-builtin');
@@ -587,12 +592,32 @@ export class Panel {
     const root = this.#h('div', 'lsai-msg lsai-assistant lsai-streaming');
     const meta = this.#h('div', 'lsai-meta', [this.#els.provider.value, this.#els.model.value].filter(Boolean).join(' · '));
     const steps = this.#h('div', 'lsai-steps');
+    const stepsBody = this.#h('div', 'lsai-steps-body');
+    const stepsHead = this.#button('lsai-steps-head', '', 'Show or hide the steps', () => {
+      live.stepsTouched = true;
+      steps.classList.toggle('lsai-collapsed');
+    });
+    stepsHead.hidden = true;
+    steps.append(stepsHead, stepsBody);
     const body = this.#h('div', 'lsai-body lsai-plain');
     const dots = this.#h('div', 'lsai-dots', '…');
     root.append(meta, steps, body, dots);
     this.#els.log.appendChild(root);
-    this.#live = { turnId, root, body, steps, dots, text: '', stepRows: new Map() };
-    return this.#live;
+    const live: Live = { turnId, root, body, steps, stepsHead, stepsBody, stepsTouched: false, dots, text: '', stepRows: new Map() };
+    this.#live = live;
+    return live;
+  }
+
+  /** Two or more steps get a head line, "10 steps · ✓ 9 · ✗ 1", that opens and closes them. */
+  #updateSteps(live: Live): void {
+    const rows = [...live.stepsBody.children];
+    const n = rows.length;
+    live.stepsHead.hidden = n < 2;
+    if (n < 2) return;
+    const ok = rows.filter((r) => r.classList.contains('lsai-ok')).length;
+    const bad = rows.filter((r) => r.classList.contains('lsai-fail')).length;
+    const open = n - ok - bad;
+    live.stepsHead.textContent = `${n} steps${ok ? ` · ✓ ${ok}` : ''}${bad ? ` · ✗ ${bad}` : ''}${open ? ` · ${open} running` : ''}`;
   }
 
   #onEvent(chatId: string, ev: BridgeEvent): void {
@@ -633,8 +658,9 @@ export class Panel {
       case 'tool.start': {
         const live = this.#ensureLive(ev.turnId);
         const row = this.#h('div', 'lsai-step', `⋯ ${String(ev.data.label ?? ev.data.name ?? 'working')}`);
-        live.steps.appendChild(row);
+        live.stepsBody.appendChild(row);
         live.stepRows.set(String(ev.data.callId), row);
+        this.#updateSteps(live);
         live.dots.hidden = false;
         live.dots.textContent = '…';
         break;
@@ -649,6 +675,7 @@ export class Panel {
             ? `✓ ${label}${hidden > 0 ? ` · ${hidden} hidden by your privacy settings` : ''}`
             : `✗ ${label}: ${String(ev.data.summary ?? 'failed')}`;
           row.classList.add(ev.data.ok ? 'lsai-ok' : 'lsai-fail');
+          this.#updateSteps(live);
         }
         break;
       }
@@ -675,6 +702,12 @@ export class Panel {
           live.body.replaceChildren(renderMarkdown({ doc: this.#doc, editor: this.#d.editor }, live.text));
           live.dots.remove();
           live.root.classList.remove('lsai-streaming');
+          // Like change groups: once the reply is done, several steps fold to their head line.
+          if (live.stepRows.size >= 2 && !live.stepsTouched) {
+            setTimeout(() => {
+              if (!live.stepsTouched) live.steps.classList.add('lsai-collapsed');
+            }, COLLAPSE_MS);
+          }
           const reason = String(ev.data.stopReason ?? 'end');
           if (reason !== 'end') live.root.appendChild(this.#h('div', 'lsai-meta', `(${reason})`));
         }

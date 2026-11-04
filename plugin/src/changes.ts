@@ -11,7 +11,7 @@ import type { ApprovalView, BridgeEvent } from './types';
  * Text only via textContent (see render.ts).
  */
 
-const COLLAPSE_MS = 1000;
+export const COLLAPSE_MS = 1000;
 
 type Card = {
   view: ApprovalView;

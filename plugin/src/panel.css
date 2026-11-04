@@ -155,7 +155,14 @@ html.is-mac #lsai-panel.lsai-side-left .lsai-head { padding-top: 40px; }
 }
 #lsai-panel .lsai-chip:hover { border-color: var(--lsai-link); }
 
-#lsai-panel .lsai-steps { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 6px; }
+#lsai-panel .lsai-steps { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 6px; }
+#lsai-panel .lsai-steps:has(.lsai-steps-body:empty) { display: none; }
+#lsai-panel .lsai-steps-body { display: flex; flex-direction: column; gap: 2px; }
+#lsai-panel .lsai-steps-head { align-self: flex-start; font: inherit; font-size: 12px; color: var(--lsai-fg2); background: var(--lsai-bg2); border: 1px solid var(--lsai-border); border-radius: 999px; padding: 1px 10px; cursor: pointer; }
+#lsai-panel .lsai-steps-head[hidden] { display: none; }
+#lsai-panel .lsai-steps-head::before { content: '▾ '; }
+#lsai-panel .lsai-steps.lsai-collapsed .lsai-steps-head::before { content: '▸ '; }
+#lsai-panel .lsai-steps.lsai-collapsed .lsai-steps-body { display: none; }
 #lsai-panel .lsai-step { font-size: 12px; color: var(--lsai-fg2); }
 #lsai-panel .lsai-step.lsai-ok { color: var(--lsai-fg2); }
 #lsai-panel .lsai-step.lsai-fail { color: var(--lsai-bad); }
