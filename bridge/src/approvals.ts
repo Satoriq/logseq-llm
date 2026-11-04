@@ -32,6 +32,8 @@ export type ApprovalRequest = {
   auto?: boolean;
   /** How long an auto-applied change waits before it runs (edits/deletes), so you can Abort. */
   graceMs?: number;
+  /** Always a card, and its answer covers only itself: "Apply all" neither skips it nor starts from it. */
+  alwaysAsk?: boolean;
 };
 
 export type ApprovalView = ApprovalRequest & { id: string; chatId: string; turnId: string; createdAt: number };
@@ -104,7 +106,7 @@ export class Approvals {
   }
 
   request(chatId: string, turnId: string, req: ApprovalRequest): Promise<{ view: ApprovalView; decision: Decision }> {
-    const auto = req.auto === true || this.#trusted.has(turnId);
+    const auto = req.alwaysAsk !== true && (req.auto === true || this.#trusted.has(turnId));
     const view: ApprovalView = { ...req, auto, id: randomUUID(), chatId, turnId, createdAt: Date.now() };
     if (!auto) delete view.graceMs;
     const entry: Entry = { view, phase: auto ? 'grace' : 'waiting', abort: new AbortController() };
@@ -152,7 +154,7 @@ export class Approvals {
       return false;
     }
     if (e.phase !== 'waiting') return false;
-    if (decision === 'apply-all') this.#trusted.set(e.view.turnId, e.view.chatId);
+    if (decision === 'apply-all' && e.view.alwaysAsk !== true) this.#trusted.set(e.view.turnId, e.view.chatId);
     if (decision === 'reject') return this.#settle(id, { decision: 'reject', reason: 'user', ...(note ? { note: note.slice(0, 2000) } : {}) });
     return this.#start(id, { decision: 'apply', reason: 'user' });
   }

@@ -273,8 +273,6 @@ html.is-mac #lsai-panel.lsai-side-left .lsai-head { padding-top: 40px; }
 #lsai-panel .lsai-stop[hidden] { display: none; }
 
 /* Your instructions editor (replaces the chat while open). */
-#lsai-panel .lsai-log[hidden],
-#lsai-panel .lsai-foot[hidden] { display: none; }
 #lsai-panel .lsai-icon.lsai-on { background: var(--lsai-bg2); color: var(--lsai-fg); border-color: var(--lsai-border); }
 #lsai-panel .lsai-instr { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 #lsai-panel .lsai-instr-head { display: flex; align-items: baseline; gap: 8px; }
@@ -302,3 +300,48 @@ html.is-mac #lsai-panel.lsai-side-left .lsai-head { padding-top: 40px; }
 #lsai-panel .lsai-web:hover { opacity: .8; }
 #lsai-panel .lsai-web.lsai-on { filter: none; opacity: 1; }
 #lsai-panel .lsai-linkbtn { font: inherit; font-size: inherit; color: var(--lsai-link); background: none; border: none; padding: 0; cursor: pointer; text-decoration: underline; }
+
+/* Tabs and splits. Each group is a row of tabs over one chat; a split halves its space. */
+#lsai-panel .lsai-area { flex: 1 1 auto; min-height: 0; display: flex; }
+#lsai-panel .lsai-area[hidden], #lsai-panel .lsai-setup-wrap[hidden], #lsai-panel .lsai-view[hidden], #lsai-panel .lsai-share[hidden] { display: none; }
+#lsai-panel .lsai-setup-wrap { padding: 12px; }
+#lsai-panel .lsai-split { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; }
+#lsai-panel .lsai-split-col { flex-direction: column; }
+#lsai-panel .lsai-sash { flex: 0 0 5px; touch-action: none; user-select: none; }
+#lsai-panel .lsai-split-row > .lsai-sash { cursor: col-resize; background: linear-gradient(to right, transparent 2px, var(--lsai-border) 2px, var(--lsai-border) 3px, transparent 3px); }
+#lsai-panel .lsai-split-col > .lsai-sash { cursor: row-resize; background: linear-gradient(to bottom, transparent 2px, var(--lsai-border) 2px, var(--lsai-border) 3px, transparent 3px); }
+#lsai-panel .lsai-sash:hover, #lsai-panel .lsai-sash:active { background: var(--lsai-link); opacity: .45; }
+#lsai-panel .lsai-group { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: size; }
+#lsai-panel .lsai-group-body { flex: 1 1 auto; min-height: 0; display: flex; }
+#lsai-panel .lsai-view { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+#lsai-panel .lsai-view-head { flex: 0 0 auto; padding: 6px 8px; border-bottom: 1px solid var(--lsai-border); flex-wrap: wrap; }
+#lsai-panel .lsai-view-head .lsai-select { min-width: 88px; }
+#lsai-panel .lsai-tabs { flex: 0 0 auto; display: flex; align-items: stretch; overflow-x: auto; background: var(--lsai-bg2); border-bottom: 1px solid var(--lsai-border); scrollbar-width: none; }
+#lsai-panel .lsai-tabs::-webkit-scrollbar { display: none; }
+#lsai-panel .lsai-tab { flex: 0 1 150px; min-width: 64px; display: flex; align-items: center; gap: 2px; padding: 3px 3px 3px 8px; font-size: 12px; color: var(--lsai-fg2); border-right: 1px solid var(--lsai-border); cursor: default; user-select: none; touch-action: none; outline: none; }
+#lsai-panel .lsai-tab:focus-visible { box-shadow: inset 0 0 0 1px var(--lsai-link); }
+#lsai-panel .lsai-tab.lsai-on { background: var(--lsai-bg); color: var(--lsai-fg); }
+#lsai-panel .lsai-tab-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#lsai-panel .lsai-tab.lsai-busy .lsai-tab-label::before { content: '● '; color: var(--lsai-link); }
+#lsai-panel .lsai-tab.lsai-attn .lsai-tab-label::before { content: '? '; color: #b45309; font-weight: 700; }
+#lsai-panel .lsai-tab-close, #lsai-panel .lsai-tab-new { flex: 0 0 auto; width: 20px; height: 20px; padding: 0; font-size: 13px; line-height: 1; color: var(--lsai-fg2); background: transparent; border: none; border-radius: 4px; cursor: pointer; }
+#lsai-panel .lsai-tab-new { align-self: center; margin: 0 4px; }
+#lsai-panel .lsai-tab-close:hover, #lsai-panel .lsai-tab-new:hover { background: var(--lsai-bg3); color: var(--lsai-fg); }
+#lsai-panel.lsai-dragging, #lsai-panel.lsai-dragging * { cursor: grabbing !important; }
+#lsai-panel .lsai-drop { position: absolute; z-index: 30; pointer-events: none; background: var(--lsai-link); opacity: .18; border-radius: 4px; }
+#lsai-panel .lsai-drop[hidden] { display: none; }
+#lsai-panel .lsai-ghost { position: absolute; z-index: 31; pointer-events: none; max-width: 180px; padding: 2px 8px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: var(--lsai-bg); border: 1px solid var(--lsai-border); border-radius: 4px; box-shadow: 0 2px 8px rgba(0, 0, 0, .2); }
+#lsai-panel .lsai-share { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; background: var(--lsai-bg2); border: 1px solid var(--lsai-link); border-radius: 8px; }
+#lsai-panel .lsai-share-text { font-size: 12.5px; }
+#lsai-panel .lsai-share .lsai-actions { justify-content: flex-end; }
+#lsai-panel .lsai-modal-body { display: flex; flex-direction: column; gap: 14px; }
+#lsai-panel .lsai-foot .lsai-actions { justify-content: flex-end; }
+/* A short or narrow chat keeps its room for messages. */
+@container (max-height: 460px) {
+  #lsai-panel .lsai-foot { padding: 6px 8px; gap: 4px; }
+  #lsai-panel .lsai-foot .lsai-input { height: 38px; padding: 6px 8px; }
+  #lsai-panel .lsai-foot .lsai-hint { display: none; }
+}
+@container (max-width: 330px) {
+  #lsai-panel .lsai-foot .lsai-hint { display: none; }
+}

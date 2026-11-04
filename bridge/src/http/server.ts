@@ -12,6 +12,7 @@ import { isEffort } from '../providers/types.ts';
 import { APPS_CHAT_ID } from '../mcp/clients.ts';
 import type { McpEndpoint } from '../mcp/endpoint.ts';
 import { SettingsError } from '../settings.ts';
+import type { Consult } from '../tools/consult.ts';
 import type { Settings } from '../settings.ts';
 import type { Approvals } from '../approvals.ts';
 import type { AuditLog } from '../audit.ts';
@@ -40,6 +41,8 @@ export type ServerDeps = {
   instructions?: Instructions;
   /** Settings from the panel. Optional so tests can omit it. */
   settings?: Settings;
+  /** Which cloud model a local model may ask. Optional so tests can omit it. */
+  consult?: Consult;
   /** The AI can write to the configured graph at all. */
   writable?: boolean;
   /** Title of the AI's memory page, for the panel's link (null = memory off). */
@@ -259,7 +262,7 @@ export function createBridgeServer(deps: ServerDeps): Server {
       for (const p of deps.turns.providers()) {
         const models = await p.models();
         // Ollama not running: nothing to pick, so it isn't offered.
-        if (models.length > 0) list.push({ id: p.id, label: p.label, locality: p.locality, webSearch: p.webSearch === true, models });
+        if (models.length > 0) list.push({ id: p.id, label: p.label, locality: p.locality, webSearch: p.webSearch === true, consult: p.consult !== undefined, models });
       }
       send(res, 200, { providers: list }, cors);
       return;
@@ -272,14 +275,20 @@ export function createBridgeServer(deps: ServerDeps): Server {
       if (method === 'POST') {
         const body = await readJson(req);
         try {
-          const v = await st.setAutoApprove(body.autoApprove);
-          void deps.audit?.record({ kind: 'settings', chatId: 'bridge', tool: 'autoApprove', outcome: `writes=${v.writes} edits=${v.edits} deletes=${v.deletes}` });
+          if (body.consult !== undefined && deps.consult) {
+            const t = await deps.consult.set(body.consult);
+            void deps.audit?.record({ kind: 'settings', chatId: 'bridge', tool: 'consult', outcome: t ? `${t.provider} ${t.model}` : 'off' });
+          } else {
+            const v = await st.setAutoApprove(body.autoApprove);
+            void deps.audit?.record({ kind: 'settings', chatId: 'bridge', tool: 'autoApprove', outcome: `writes=${v.writes} edits=${v.edits} deletes=${v.deletes}` });
+          }
         } catch (err) {
           if (err instanceof SettingsError) throw new HttpError(400, err.message);
           throw err;
         }
       }
-      send(res, 200, { graph: st.graph, writable: deps.writable === true, autoApprove: await st.autoApprove() }, cors);
+      const target = await deps.consult?.target();
+      send(res, 200, { graph: st.graph, writable: deps.writable === true, autoApprove: await st.autoApprove(), consult: target ? { provider: target.provider.id, model: target.model } : null }, cors);
       return;
     }
 
@@ -365,6 +374,17 @@ export function createBridgeServer(deps: ServerDeps): Server {
           ...(body.web === true ? { web: true } : {}),
         });
         send(res, 202, { turnId }, cors);
+        return;
+      }
+      if (parts.length === 4 && b === 'share' && method === 'GET') {
+        send(res, 200, await deps.turns.shareState(id, url.searchParams.get('provider') ?? ''), cors);
+        return;
+      }
+      if (parts.length === 4 && b === 'share' && method === 'POST') {
+        const body = await readJson(req);
+        if (typeof body.share !== 'boolean') throw new HttpError(400, '"share" must be true or false');
+        await deps.turns.share(id, optionalString(body, 'provider', 64) ?? '', body.share);
+        send(res, 200, await deps.turns.shareState(id, optionalString(body, 'provider', 64) ?? ''), cors);
         return;
       }
       if (parts.length === 4 && b === 'cancel' && method === 'POST') {

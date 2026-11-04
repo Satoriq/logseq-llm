@@ -18,7 +18,7 @@ export const chatWire: Wire = (o: WireOptions): WireSession => {
       const res = await openStream(o, { authorization: `Bearer ${o.key}` }, {
         model: o.model,
         messages,
-        tools,
+        ...(tools.length > 0 ? { tools } : {}),
         stream: true,
         stream_options: { include_usage: true },
         ...(o.sendEffort && o.effort !== 'auto' ? { reasoning_effort: o.effort === 'off' ? 'none' : o.effort } : {}),

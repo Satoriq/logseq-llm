@@ -3,7 +3,8 @@ import type { Secrets } from '../keychain.ts';
 import type { ToolRunner } from '../tools/runner.ts';
 import { todayLine } from './claude-cli.ts';
 import type { Wire } from './stream.ts';
-import type { Effort, ModelInfo, Provider, TurnInfo, TurnRequest, TurnResult } from './types.ts';
+import { CONSULT_PROMPT } from './types.ts';
+import type { ConsultRequest, Effort, ModelInfo, Provider, TurnInfo, TurnRequest, TurnResult } from './types.ts';
 import { anthropicWire } from './wire-anthropic.ts';
 import { chatWire } from './wire-chat.ts';
 import { responsesWire } from './wire-responses.ts';
@@ -17,8 +18,6 @@ import { responsesWire } from './wire-responses.ts';
  */
 
 const MAX_STEPS = 20;
-/** Every turn resends the chat, and each token costs money. */
-const MAX_HISTORY = 40;
 const KEY_TTL_MS = 30_000;
 
 const CLAUDE_EFFORTS: Effort[] = ['auto', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -167,6 +166,29 @@ export class ApiProvider implements Provider {
     return [...preset.models, ...(extraModels ?? []).filter((id) => !known.has(id)).map((id) => ({ id, label: id, efforts: AUTO }))];
   }
 
+  async consult({ model, question, signal }: ConsultRequest): Promise<string> {
+    const { preset, secrets } = this.#o;
+    const key = await secrets.get(preset.key);
+    if (!key) throw new Error(`No API key for ${preset.label}.`);
+    const session = preset.wire({
+      label: preset.label,
+      url: preset.url,
+      key,
+      model,
+      effort: 'auto',
+      system: CONSULT_PROMPT,
+      messages: [{ role: 'user', text: question }],
+      tools: [],
+      signal: signal ?? new AbortController().signal,
+      ...(preset.extraBody ? { extraBody: preset.extraBody } : {}),
+      ...(preset.namedResults ? { namedResults: true } : {}),
+    });
+    let text = '';
+    const step = await session.step({ text: (t) => (text += t), thinking: () => undefined });
+    if (step.stop === 'refusal') throw new Error(step.notice ?? `${preset.label} declined this question.`);
+    return text;
+  }
+
   async runTurn(req: TurnRequest): Promise<TurnResult> {
     const o = this.#o;
     const { preset } = o;
@@ -189,7 +211,7 @@ export class ApiProvider implements Provider {
         model: req.model,
         effort: req.effort,
         system: await o.systemPrompt(turn),
-        messages: [...req.messages.slice(0, -1).slice(-MAX_HISTORY).map((m) => ({ role: m.role, text: messageText(m) })), { role: 'user', text: prompt }],
+        messages: [...req.messages.slice(0, -1).map((m) => ({ role: m.role, text: messageText(m) })), { role: 'user', text: prompt }],
         tools: o.runner.tools,
         signal: req.signal,
         ...(preset.extraBody ? { extraBody: preset.extraBody } : {}),

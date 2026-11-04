@@ -1,17 +1,19 @@
 import { BridgeError } from './bridge';
 import type { BridgeClient, ConnState } from './bridge';
-import { ChangeCards, COLLAPSE_MS } from './changes';
-import { renderMarkdown } from './render';
+import { ChangeCards } from './changes';
+import { ChatView, shortLabel } from './chatview';
+import type { ViewDeps } from './chatview';
+import { activate, addTab, allTabs, clampRatio, closeTab, groupOf, groups, moveTab, newGroup, parseLayout, setRatio, zoneAt } from './layout';
+import type { Group, LayoutNode, Split, Tab, Zone } from './layout';
 import { PANEL_VERSION } from './version';
-import type { AutoApprove, BridgeEvent, ChatMeta, EditorPort, Effort, ProviderInfo, SettingsState, StoredMessage } from './types';
+import type { AutoApprove, BridgeEvent, ChatMeta, ConsultTarget, EditorPort, Prefs, ProviderInfo, SettingsState } from './types';
 
 /**
- * The chat panel UI. Built with createElement/textContent only (see render.ts for the rules).
- * It depends on nothing Logseq-specific except the EditorPort, so it can be tested in a
+ * The panel's shell: the top bar, settings, your instructions, and the tabs and splits. Each tab
+ * is a ChatView (chatview.ts). Built with createElement/textContent only (see render.ts for the
+ * rules). It depends on nothing Logseq-specific except the EditorPort, so it can be tested in a
  * plain browser page.
  */
-
-export type Prefs = { provider?: string; model?: string; effort?: Effort; chatId?: string; includePage?: boolean; web?: boolean };
 
 export type PanelDeps = {
   doc: Document;
@@ -22,33 +24,16 @@ export type PanelDeps = {
   onClose: () => void;
 };
 
-const EFFORT_LABEL: Record<Effort, string> = {
-  auto: 'Auto effort',
-  off: 'Off',
-  low: 'Low',
-  medium: 'Medium',
-  high: 'High',
-  xhigh: 'Extra high',
-  max: 'Max',
-};
-
-type Live = {
-  turnId: string | undefined;
-  root: HTMLElement;
-  body: HTMLElement;
-  /** Tool steps: a group that folds to "N steps · ✓ N" once the reply is done. */
-  steps: HTMLElement;
-  stepsHead: HTMLButtonElement;
-  stepsBody: HTMLElement;
-  /** You opened or closed the steps yourself: don't fold them for you. */
-  stepsTouched: boolean;
-  dots: HTMLElement;
-  text: string;
-  stepRows: Map<string, HTMLElement>;
-};
-
 /** How long a finished card from a connected app stays in view. */
 const APP_CARD_KEPT_MS = 8000;
+/** A press on a tab turns into a drag after this many pixels. */
+const DRAG_START_PX = 6;
+
+type Drop = { groupId: string; zone: Zone; index?: number; rect: DOMRect };
+
+function newId(): string {
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
 
 export class Panel {
   readonly root: HTMLElement;
@@ -57,33 +42,23 @@ export class Panel {
   #els!: {
     status: HTMLElement;
     chatSelect: HTMLSelectElement;
-    provider: HTMLSelectElement;
-    model: HTMLSelectElement;
-    effort: HTMLSelectElement;
-    log: HTMLElement;
+    setup: HTMLElement;
+    area: HTMLElement;
     apps: HTMLElement;
-    foot: HTMLElement;
     instrBtn: HTMLButtonElement;
-    chips: HTMLElement;
-    web: HTMLButtonElement;
-    input: HTMLTextAreaElement;
-    send: HTMLButtonElement;
-    stop: HTMLButtonElement;
   };
   #providers: ProviderInfo[] = [];
   #bridgeVersion = '?';
   #chats: ChatMeta[] = [];
-  #chatId: string | null = null;
-  #epoch: string | null = null;
-  #unsub: (() => void) | null = null;
-  #live: Live | null = null;
-  #busy = false;
+  #layout: LayoutNode | null = null;
+  #views = new Map<string, ChatView>();
+  /** The tab you were last in: new tabs and pinned blocks go there. */
+  #focusTab: string | null = null;
+  #strips = new Map<string, HTMLElement>();
+  #savedLayout = '';
   #page: { uuid: string; title: string; kind: 'page' | 'block' } | null = null;
-  #pinned = new Map<string, string>();
-  #changes: ChangeCards;
   /** Cards from connected apps, in their own place: they belong to no chat. */
   #appChanges: ChangeCards;
-  #destroyed = false;
   /** Closes the open settings window, if any. */
   #closeSettings: (() => void) | null = null;
   /** The open instructions editor, if any. */
@@ -93,7 +68,6 @@ export class Panel {
     this.root = root;
     this.#d = deps;
     this.#doc = deps.doc;
-    this.#changes = new ChangeCards({ doc: deps.doc, bridge: () => this.#d.bridge, onChange: () => this.#scroll(true) });
     this.#appChanges = new ChangeCards({
       doc: deps.doc,
       bridge: () => this.#d.bridge,
@@ -129,75 +103,34 @@ export class Panel {
     const head = this.#h('div', 'lsai-head');
     const row1 = this.#h('div', 'lsai-row');
     const chatSelect = this.#h('select', 'lsai-select lsai-chat');
-    chatSelect.title = 'Chats';
-    chatSelect.addEventListener('change', () => void this.#selectChat(chatSelect.value || null));
+    chatSelect.title = 'Open a chat in a tab';
+    chatSelect.addEventListener('change', () => {
+      const id = chatSelect.value;
+      chatSelect.value = '';
+      if (id) void this.#openChat(id);
+    });
     const instrBtn = this.#button('lsai-icon', '✎', 'Your instructions for the AI', () => void this.#toggleInstructions());
     row1.append(
       chatSelect,
-      this.#button('lsai-icon', '＋', 'New chat', () => void this.#selectChat(null)),
       instrBtn,
       this.#button('lsai-icon', '⚙', 'Settings', () => void this.#openSettings()),
       this.#button('lsai-icon', '×', 'Close the panel', () => this.#d.onClose()),
     );
-    const row2 = this.#h('div', 'lsai-row');
-    const provider = this.#h('select', 'lsai-select lsai-provider');
-    const model = this.#h('select', 'lsai-select');
-    const effort = this.#h('select', 'lsai-select');
-    provider.title = 'Provider';
-    model.title = 'Model';
-    effort.title = 'Effort';
-    provider.addEventListener('change', () => {
-      this.#d.prefs.set({ provider: provider.value });
-      this.#fillModels();
-    });
-    model.addEventListener('change', () => {
-      this.#d.prefs.set({ model: model.value });
-      this.#fillEfforts();
-    });
-    effort.addEventListener('change', () => this.#d.prefs.set({ effort: effort.value as Effort }));
-    row2.append(provider, model, effort);
     const status = this.#h('div', 'lsai-status', 'Connecting…');
-    head.append(row1, row2, status);
+    head.append(row1, status);
 
-    const log = this.#h('div', 'lsai-log');
-    log.setAttribute('aria-live', 'polite');
-
+    const setup = this.#h('div', 'lsai-setup-wrap');
+    setup.hidden = true;
+    const area = this.#h('div', 'lsai-area');
     const apps = this.#h('div', 'lsai-apps');
-
-    const foot = this.#h('div', 'lsai-foot');
-    const chips = this.#h('div', 'lsai-chips');
-    const input = this.#h('textarea', 'lsai-input');
-    input.rows = 3;
-    input.placeholder = 'Ask about your notes…';
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-        e.preventDefault();
-        void this.send();
-      } else if (e.key === 'Escape') {
-        input.blur();
-      }
-    });
-    const actions = this.#h('div', 'lsai-actions');
-    const hint = this.#h('span', 'lsai-hint', 'Enter to send · Shift+Enter for a new line');
-    const web = this.#button('lsai-icon lsai-web', '🌐', '', () => {
-      this.#d.prefs.set({ web: !web.classList.contains('lsai-on') });
-      this.#updateWeb();
-    });
-    web.hidden = true;
-    const send = this.#button('lsai-send', 'Send', 'Send (Enter)', () => void this.send());
-    const stop = this.#button('lsai-stop', 'Stop', 'Stop the reply', () => void this.#stop());
-    stop.hidden = true;
-    actions.append(hint, web, stop, send);
-    foot.append(chips, input, actions);
 
     // Typing in the panel must not trigger Logseq's keyboard shortcuts.
     for (const type of ['keydown', 'keyup', 'keypress'] as const) {
       this.root.addEventListener(type, (e) => e.stopPropagation());
     }
 
-    this.root.append(head, log, apps, foot);
-    this.#els = { status, chatSelect, provider, model, effort, log, apps, foot, instrBtn, chips, web, input, send, stop };
-    this.#renderChips();
+    this.root.append(head, setup, area, apps);
+    this.#els = { status, chatSelect, setup, area, apps, instrBtn };
   }
 
   // ---------- settings ----------
@@ -303,6 +236,54 @@ export class Panel {
     section.appendChild(message);
     show();
     body.replaceChildren(section);
+    if (state.consult !== undefined) body.appendChild(this.#consultSetting(state.consult));
+  }
+
+  /** The cloud model a local model may ask. */
+  #consultSetting(saved: ConsultTarget | null): HTMLElement {
+    const b = this.#d.bridge as BridgeClient;
+    const section = this.#h('div', 'lsai-setting');
+    section.appendChild(this.#h('div', 'lsai-setting-title', 'Consult a cloud model'));
+    section.appendChild(this.#h('div', 'lsai-hint', 'A local model can ask this model one question. You read the exact text first, and nothing else is sent.'));
+    const select = this.#h('select', 'lsai-select');
+    select.title = 'Consult model';
+    const targets = new Map<string, ConsultTarget | null>([['off', null]]);
+    const add = (value: string, label: string): void => {
+      const o = this.#h('option', undefined, label);
+      o.value = value;
+      select.appendChild(o);
+    };
+    add('off', 'Off');
+    for (const p of this.#providers) {
+      if (p.locality !== 'cloud' || !p.consult) continue;
+      for (const m of p.models) {
+        const value = `${p.id}/${m.id}`;
+        targets.set(value, { provider: p.id, model: m.id });
+        add(value, `${shortLabel(p)} · ${m.label}`);
+      }
+    }
+    const value = (t: ConsultTarget | null): string => (t ? `${t.provider}/${t.model}` : 'off');
+    let current = saved;
+    select.value = value(current);
+    const message = this.#h('div', 'lsai-hint');
+    select.addEventListener('change', () => {
+      void (async () => {
+        select.disabled = true;
+        message.className = 'lsai-hint';
+        message.textContent = 'Saving…';
+        try {
+          current = (await b.saveConsult(targets.get(select.value) ?? null)).consult ?? null;
+          message.textContent = 'Saved. Used from the next message.';
+        } catch (err) {
+          message.className = 'lsai-hint lsai-bad';
+          message.textContent = `Not saved: ${(err as Error).message}`;
+        }
+        select.value = value(current);
+        select.disabled = false;
+      })();
+    });
+    section.append(select, message);
+    return section;
   }
 
   // ---------- your instructions ----------
@@ -365,9 +346,8 @@ export class Panel {
       root.remove();
       this.#instr = null;
       this.#els.instrBtn.classList.remove('lsai-on');
-      this.#els.log.hidden = false;
-      this.#els.foot.hidden = false;
-      this.#els.input.focus();
+      this.#els.area.hidden = false;
+      this.focus();
     };
     const doSave = async (): Promise<void> => {
       if (!b || save.disabled) return;
@@ -404,9 +384,8 @@ export class Panel {
 
     this.#instr = { root, close: done };
     this.#els.instrBtn.classList.add('lsai-on');
-    this.#els.log.hidden = true;
-    this.#els.foot.hidden = true;
-    this.#els.log.after(root);
+    this.#els.area.hidden = true;
+    this.#els.area.after(root);
     text.disabled = true;
     state.textContent = 'Loading…';
     refresh();
@@ -463,16 +442,20 @@ export class Panel {
       this.#connError(err);
       return;
     }
-    this.#fillProviders();
     this.#fillChats();
-    const saved = this.#d.prefs.get().chatId;
-    await this.#selectChat(saved && this.#chats.some((c) => c.id === saved) ? saved : null);
+    const prefs = this.#d.prefs.get();
+    const known = new Set(this.#chats.map((c) => c.id));
+    // Before tabs, the panel remembered one chat.
+    const layout = (prefs.layout ? parseLayout(prefs.layout) : null) ?? newGroup(newId(), { id: newId(), chatId: prefs.chatId ?? null });
+    for (const t of allTabs(layout)) if (t.chatId && !known.has(t.chatId)) t.chatId = null;
+    this.#layout = layout;
+    this.#focusTab = groups(layout)[0]?.active ?? null;
+    this.#render();
   }
 
   destroy(): void {
-    this.#destroyed = true;
-    this.#unsub?.();
-    this.#changes.clear();
+    for (const v of this.#views.values()) v.destroy();
+    this.#views.clear();
     this.#appChanges.clear();
     this.#closeSettings?.();
   }
@@ -488,19 +471,18 @@ export class Panel {
   }
 
   focus(): void {
-    this.#els.input.focus();
+    this.#focused()?.focus();
   }
 
   /** Called on route changes: the page chip follows the page you're viewing. */
   setCurrentPage(page: { uuid: string; title: string; kind: 'page' | 'block' } | null): void {
     this.#page = page;
-    this.#renderChips();
+    for (const v of this.#views.values()) v.setPage(page);
   }
 
-  /** Pins blocks (e.g. from the block menu) as context for the next messages. */
+  /** Pins blocks (e.g. from the block menu) as context for the next messages, in the tab you're in. */
   pinBlocks(blocks: { uuid: string; title: string }[]): void {
-    for (const b of blocks) this.#pinned.set(b.uuid, b.title);
-    this.#renderChips();
+    this.#focused()?.pin(blocks);
   }
 
   // ---------- setup / errors ----------
@@ -511,7 +493,8 @@ export class Panel {
     const box = this.#h('div', 'lsai-setup');
     box.appendChild(this.#h('strong', undefined, title));
     for (const l of lines) box.appendChild(this.#h('div', 'lsai-mono', l));
-    this.#els.log.replaceChildren(box);
+    this.#els.setup.replaceChildren(box);
+    this.#els.setup.hidden = false;
   }
 
   #connError(err: unknown): void {
@@ -547,6 +530,7 @@ export class Panel {
   #conn(s: ConnState): void {
     const el = this.#els.status;
     if (s.state === 'live') {
+      this.#els.setup.hidden = true;
       el.textContent = `● Connected${s.mode === 'proxy' ? ' (via Logseq)' : ''} · panel ${PANEL_VERSION} · bridge ${this.#bridgeVersion}`;
       el.className = 'lsai-status lsai-good';
     } else if (s.state === 'retrying') {
@@ -558,354 +542,293 @@ export class Panel {
     }
   }
 
-  // ---------- pickers ----------
-
-  #option(select: HTMLSelectElement, value: string, label: string): void {
-    const o = this.#h('option', undefined, label);
-    o.value = value;
-    select.appendChild(o);
-  }
-
-  #fillProviders(): void {
-    const { provider } = this.#els;
-    provider.replaceChildren();
-    for (const p of this.#providers) {
-      // "Claude (Pro, claude CLI)" → "Claude · cloud"; the full label is the tooltip.
-      this.#option(provider, p.id, `${p.label.replace(/\s*\([^)]*\)/g, '')} · ${p.locality}`);
-      const o = provider.lastElementChild as HTMLOptionElement | null;
-      if (o) o.title = p.label;
-    }
-    const pref = this.#d.prefs.get().provider;
-    provider.value = this.#providers.some((p) => p.id === pref) ? (pref as string) : (this.#providers[0]?.id ?? '');
-    this.#fillModels();
-  }
-
-  /** 🌐 shows only for providers that can search; on/off is remembered. */
-  #updateWeb(): void {
-    const { web, provider } = this.#els;
-    const can = this.#providers.find((x) => x.id === provider.value)?.webSearch === true;
-    const on = can && this.#d.prefs.get().web === true;
-    web.hidden = !can;
-    web.classList.toggle('lsai-on', on);
-    web.setAttribute('aria-pressed', String(on));
-    web.title = on ? 'Web search is on: Claude may search the internet for your messages. Click to turn off.' : 'Web search is off. Click to let Claude search the internet.';
-  }
-
-  #fillModels(): void {
-    this.#updateWeb();
-    const { provider, model } = this.#els;
-    const p = this.#providers.find((x) => x.id === provider.value);
-    model.replaceChildren();
-    for (const m of p?.models ?? []) this.#option(model, m.id, m.label);
-    const pref = this.#d.prefs.get().model;
-    model.value = p?.models.some((m) => m.id === pref) ? (pref as string) : (p?.models[0]?.id ?? '');
-    this.#fillEfforts();
-  }
-
-  #fillEfforts(): void {
-    const { provider, model, effort } = this.#els;
-    const m = this.#providers.find((x) => x.id === provider.value)?.models.find((x) => x.id === model.value);
-    effort.replaceChildren();
-    for (const e of m?.efforts ?? ['auto']) this.#option(effort, e, EFFORT_LABEL[e]);
-    const pref = this.#d.prefs.get().effort;
-    effort.value = m?.efforts.includes(pref as Effort) ? (pref as string) : (m?.efforts[0] ?? 'auto');
-  }
-
   #fillChats(): void {
     const s = this.#els.chatSelect;
     s.replaceChildren();
-    this.#option(s, '', 'New chat');
-    for (const c of this.#chats) this.#option(s, c.id, c.title);
-    s.value = this.#chatId ?? '';
+    const first = this.#h('option', undefined, 'Open a chat…');
+    first.value = '';
+    s.appendChild(first);
+    for (const c of this.#chats) {
+      const o = this.#h('option', undefined, c.title);
+      o.value = c.id;
+      s.appendChild(o);
+    }
+    s.value = '';
   }
 
-  // ---------- context chips ----------
+  // ---------- tabs and splits ----------
 
-  #renderChips(): void {
-    const c = this.#els.chips;
-    c.replaceChildren();
-    const includePage = this.#d.prefs.get().includePage !== false;
-    if (this.#page) {
-      const what = this.#page.kind === 'block' ? 'zoomed-in block' : 'page';
-      const label = `${this.#page.kind === 'block' ? '▦' : '📄'} ${this.#page.title.slice(0, 50) || what}`;
-      const b = this.#button(`lsai-ctx${includePage ? ' lsai-on' : ''}`, label, includePage ? `This ${what} is sent as context (click to stop)` : `Click to send this ${what} as context`, () => {
-        this.#d.prefs.set({ includePage: !includePage });
-        this.#renderChips();
-      });
-      b.setAttribute('aria-pressed', String(includePage));
-      c.appendChild(b);
-    }
-    for (const [uuid, title] of this.#pinned) {
-      const b = this.#button('lsai-ctx lsai-on', `▦ ${title.slice(0, 40) || 'block'}  ×`, 'Pinned block (click to remove)', () => {
-        this.#pinned.delete(uuid);
-        this.#renderChips();
-      });
-      c.appendChild(b);
-    }
+  #focused(): ChatView | null {
+    return this.#focusTab ? (this.#views.get(this.#focusTab) ?? null) : null;
   }
 
-  // ---------- chats ----------
-
-  async #selectChat(id: string | null): Promise<void> {
-    this.#unsub?.();
-    this.#unsub = null;
-    this.#live = null;
-    this.#setBusy(false);
-    this.#chatId = id;
-    this.#d.prefs.set({ chatId: id ?? '' });
-    this.#els.chatSelect.value = id ?? '';
-    this.#els.log.replaceChildren();
-    if (!id) {
-      this.#els.log.appendChild(this.#h('div', 'lsai-empty', 'Ask anything about your notes. The page you are on is sent as context; #private blocks never leave your Mac.'));
-      return;
-    }
-    await this.#loadChat(id);
+  #focusGroup(layout: LayoutNode): Group {
+    return (this.#focusTab ? groupOf(layout, this.#focusTab) : null) ?? (groups(layout)[0] as Group);
   }
 
-  async #loadChat(id: string): Promise<void> {
-    const b = this.#d.bridge;
-    if (!b) return;
-    let state;
-    try {
-      state = await b.chat(id);
-    } catch (err) {
-      this.#connError(err);
-      return;
-    }
-    if (this.#destroyed || this.#chatId !== id) return;
-    this.#epoch = state.epoch;
-    this.#els.log.replaceChildren();
-    for (const m of state.messages) this.#renderStored(m);
-    if (state.busy) {
-      // Reopened while a reply is running: keep Stop available and say what it's waiting for.
-      this.#setBusy(true);
-      const waiting = (state.approvals ?? []).length > 0;
-      this.#ensureLive(undefined).dots.textContent = waiting ? 'Waiting for your approval (see the card below)…' : 'A reply is in progress…';
-    }
-    for (const a of state.approvals ?? []) this.#changes.show(a, this.#live?.root ?? this.#els.log);
-    this.#scroll(true);
-    this.#unsub = b.subscribe(id, state.lastSeq, (ev) => this.#onEvent(id, ev), (s) => this.#conn(s));
-  }
-
-  #renderStored(m: StoredMessage): void {
-    const text = m.parts.filter((p): p is { type: 'text'; text: string } => p.type === 'text').map((p) => p.text).join('');
-    if (m.role === 'user') {
-      this.#els.log.appendChild(this.#h('div', 'lsai-msg lsai-user', text));
-      return;
-    }
-    const box = this.#h('div', 'lsai-msg lsai-assistant');
-    const meta = [m.meta?.provider, m.meta?.model].filter(Boolean).join(' · ');
-    if (meta) box.appendChild(this.#h('div', 'lsai-meta', meta));
-    const body = this.#h('div', 'lsai-body');
-    body.appendChild(renderMarkdown({ doc: this.#doc, editor: this.#d.editor }, text));
-    box.appendChild(body);
-    if (m.meta?.stopReason && m.meta.stopReason !== 'end') box.appendChild(this.#h('div', 'lsai-meta', `(${m.meta.stopReason})`));
-    this.#els.log.appendChild(box);
-  }
-
-  // ---------- sending ----------
-
-  async send(): Promise<void> {
-    const b = this.#d.bridge;
-    const text = this.#els.input.value.trim();
-    if (!b || !text || this.#busy) return;
-    const { provider, model, effort } = this.#els;
-    if (!provider.value || !model.value) return;
-    this.#setBusy(true);
-    try {
-      if (!this.#chatId) {
-        const chat = await b.createChat(text.slice(0, 60));
+  #view(tab: Tab): ChatView {
+    const existing = this.#views.get(tab.id);
+    if (existing) return existing;
+    const deps: ViewDeps = {
+      doc: this.#doc,
+      bridge: this.#d.bridge,
+      editor: this.#d.editor,
+      prefs: this.#d.prefs,
+      providers: () => this.#providers,
+      onChange: () => this.#changed(),
+      onFocus: () => {
+        this.#focusTab = tab.id;
+      },
+      onChatCreated: (chat) => {
         this.#chats.unshift(chat);
-        this.#chatId = chat.id;
-        this.#d.prefs.set({ chatId: chat.id });
         this.#fillChats();
-        this.#els.log.replaceChildren();
-        this.#unsub = b.subscribe(chat.id, 0, (ev) => this.#onEvent(chat.id, ev), (s) => this.#conn(s));
-      }
-      const includePage = this.#d.prefs.get().includePage !== false;
-      this.#els.log.appendChild(this.#h('div', 'lsai-msg lsai-user', text));
-      this.#scroll(true);
-      this.#els.input.value = '';
-      await b.send(this.#chatId, {
-        text,
-        provider: provider.value,
-        model: model.value,
-        effort: effort.value as Effort,
-        context: {
-          ...(includePage && this.#page ? { pageUuid: this.#page.uuid } : {}),
-          blockUuids: [...this.#pinned.keys()],
-        },
-        ...(!this.#els.web.hidden && this.#els.web.classList.contains('lsai-on') ? { web: true } : {}),
+      },
+      onConn: (s) => this.#conn(s),
+      onError: (err) => this.#connError(err),
+      onPrefs: () => {
+        for (const v of this.#views.values()) v.refreshPrefs();
+      },
+      onBridgeRestart: () => void this.#refreshVersion(),
+    };
+    const view = new ChatView(tab, this.#chats.find((c) => c.id === tab.chatId)?.title ?? 'New chat', deps);
+    view.setPage(this.#page);
+    view.fillProviders();
+    this.#views.set(tab.id, view);
+    return view;
+  }
+
+  #strip(g: Group): HTMLElement {
+    const strip = this.#h('div', 'lsai-tabs');
+    strip.setAttribute('role', 'tablist');
+    for (const t of g.tabs) {
+      const v = this.#view(t);
+      const el = this.#h('div', `lsai-tab${t.id === g.active ? ' lsai-on' : ''}${v.busy ? ' lsai-busy' : ''}${v.attention ? ' lsai-attn' : ''}`);
+      el.dataset.tab = t.id;
+      el.title = v.attention ? `${v.title} (waiting for your approval)` : v.title;
+      el.tabIndex = 0;
+      el.setAttribute('role', 'tab');
+      el.setAttribute('aria-selected', String(t.id === g.active));
+      el.append(this.#h('span', 'lsai-tab-label', v.title), this.#button('lsai-tab-close', '×', 'Close this tab', () => this.#closeTab(t.id)));
+      el.addEventListener('pointerdown', (e) => this.#pressTab(e, t));
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && e.target === el) this.#showTab(t.id);
       });
-    } catch (err) {
-      this.#setBusy(false);
-      this.#els.input.value = text;
-      this.#els.log.appendChild(this.#h('div', 'lsai-error', `Could not send: ${(err as Error).message}`));
-      this.#scroll(true);
+      strip.appendChild(el);
     }
+    strip.appendChild(this.#button('lsai-tab-new', '＋', 'New chat in a new tab', () => this.#newTab(g.id)));
+    return strip;
   }
 
-  async #stop(): Promise<void> {
-    if (this.#chatId) await this.#d.bridge?.cancel(this.#chatId).catch(() => undefined);
-  }
-
-  #setBusy(busy: boolean): void {
-    this.#busy = busy;
-    this.#els.send.disabled = busy;
-    this.#els.stop.hidden = !busy;
-  }
-
-  // ---------- streaming ----------
-
-  #ensureLive(turnId: string | undefined): Live {
-    if (this.#live && (turnId === undefined || this.#live.turnId === undefined || this.#live.turnId === turnId)) {
-      if (turnId !== undefined) this.#live.turnId = turnId;
-      return this.#live;
-    }
-    const root = this.#h('div', 'lsai-msg lsai-assistant lsai-streaming');
-    const meta = this.#h('div', 'lsai-meta', [this.#els.provider.value, this.#els.model.value].filter(Boolean).join(' · '));
-    const steps = this.#h('div', 'lsai-steps');
-    const stepsBody = this.#h('div', 'lsai-steps-body');
-    const stepsHead = this.#button('lsai-steps-head', '', 'Show or hide the steps', () => {
-      live.stepsTouched = true;
-      steps.classList.toggle('lsai-collapsed');
-    });
-    stepsHead.hidden = true;
-    steps.append(stepsHead, stepsBody);
-    const body = this.#h('div', 'lsai-body lsai-plain');
-    const dots = this.#h('div', 'lsai-dots', '…');
-    root.append(meta, steps, body, dots);
-    this.#els.log.appendChild(root);
-    const live: Live = { turnId, root, body, steps, stepsHead, stepsBody, stepsTouched: false, dots, text: '', stepRows: new Map() };
-    this.#live = live;
-    return live;
-  }
-
-  /** Two or more steps get a head line, "10 steps · ✓ 9 · ✗ 1", that opens and closes them. */
-  #updateSteps(live: Live): void {
-    const rows = [...live.stepsBody.children];
-    const n = rows.length;
-    live.stepsHead.hidden = n < 2;
-    if (n < 2) return;
-    const ok = rows.filter((r) => r.classList.contains('lsai-ok')).length;
-    const bad = rows.filter((r) => r.classList.contains('lsai-fail')).length;
-    const open = n - ok - bad;
-    live.stepsHead.textContent = `${n} steps${ok ? ` · ✓ ${ok}` : ''}${bad ? ` · ✗ ${bad}` : ''}${open ? ` · ${open} running` : ''}`;
-  }
-
-  #onEvent(chatId: string, ev: BridgeEvent): void {
-    if (this.#destroyed || chatId !== this.#chatId) return;
-    if (ev.type === 'log.gap' || (this.#epoch !== null && ev.epoch && ev.epoch !== this.#epoch)) {
-      // The bridge restarted or events were dropped: reload the transcript.
-      const waiting = this.#busy;
-      this.#epoch = ev.epoch || null;
-      void this.#selectChat(chatId).then(() => {
-        if (waiting && !this.#busy) this.#els.log.appendChild(this.#h('div', 'lsai-notice', 'The bridge restarted, so this reply was lost. Send your message again.'));
+  #nodeEl(n: LayoutNode, path = ''): HTMLElement {
+    if (n.kind === 'split') {
+      const el = this.#h('div', `lsai-split lsai-split-${n.dir}`);
+      const a = this.#nodeEl(n.a, `${path}a`);
+      const b = this.#nodeEl(n.b, `${path}b`);
+      this.#share(a, b, n.ratio);
+      const sash = this.#h('div', 'lsai-sash');
+      sash.title = 'Drag to resize, double-click for half and half';
+      sash.addEventListener('pointerdown', (e) => this.#pressSash(e, sash, el, a, b, n, path));
+      sash.addEventListener('dblclick', () => {
+        if (this.#layout) this.#commit(setRatio(this.#layout, path, 0.5));
       });
-      void this.#refreshVersion();
-      return;
+      el.append(a, sash, b);
+      return el;
     }
-    this.#epoch = ev.epoch || this.#epoch;
-    const near = this.#nearBottom();
-    if (this.#changes.onEvent(ev, () => this.#ensureLive(ev.turnId).root)) {
-      if (ev.type === 'approval.resolved' && this.#live) this.#live.dots.textContent = '…';
-      this.#scroll(near);
-      return;
-    }
-    switch (ev.type) {
-      case 'turn.start': {
-        this.#setBusy(true);
-        const live = this.#ensureLive(ev.turnId);
-        const meta = live.root.querySelector('.lsai-meta');
-        if (meta) meta.textContent = [ev.data.provider, ev.data.model, ev.data.locality === 'cloud' ? 'cloud' : 'local', ev.data.web === true ? '🌐 web' : ''].filter(Boolean).join(' · ');
-        break;
-      }
-      case 'text.delta': {
-        const live = this.#ensureLive(ev.turnId);
-        live.text += String(ev.data.text ?? '');
-        live.body.textContent = live.text; // plain text while streaming; Markdown at the end
-        live.dots.hidden = true;
-        break;
-      }
-      case 'thinking.delta': {
-        const live = this.#ensureLive(ev.turnId);
-        if (!live.text) live.dots.textContent = 'Thinking…';
-        break;
-      }
-      case 'tool.start': {
-        const live = this.#ensureLive(ev.turnId);
-        const row = this.#h('div', 'lsai-step', `⋯ ${String(ev.data.label ?? ev.data.name ?? 'working')}`);
-        live.stepsBody.appendChild(row);
-        live.stepRows.set(String(ev.data.callId), row);
-        this.#updateSteps(live);
-        live.dots.hidden = false;
-        live.dots.textContent = '…';
-        break;
-      }
-      case 'tool.end': {
-        const live = this.#ensureLive(ev.turnId);
-        const row = live.stepRows.get(String(ev.data.callId));
-        if (row) {
-          const label = (row.textContent ?? '').replace(/^⋯ /, '');
-          const hidden = Number(ev.data.hiddenCount ?? 0);
-          row.textContent = ev.data.ok
-            ? `✓ ${label}${hidden > 0 ? ` · ${hidden} hidden by your privacy settings` : ''}`
-            : `✗ ${label}: ${String(ev.data.summary ?? 'failed')}`;
-          row.classList.add(ev.data.ok ? 'lsai-ok' : 'lsai-fail');
-          this.#updateSteps(live);
-        }
-        break;
-      }
-      case 'tool.waiting': {
-        const live = this.#ensureLive(ev.turnId);
-        live.dots.hidden = false;
-        live.dots.textContent = 'Waiting for your approval…';
-        break;
-      }
-      case 'notice': {
-        const target = this.#live?.root ?? this.#els.log;
-        target.appendChild(this.#h('div', 'lsai-notice', String(ev.data.message ?? '')));
-        break;
-      }
-      case 'error': {
-        const target = this.#live?.root ?? this.#els.log;
-        target.appendChild(this.#h('div', 'lsai-error', String(ev.data.message ?? 'error')));
-        break;
-      }
-      case 'turn.end': {
-        const live = this.#live;
-        if (live) {
-          live.body.classList.remove('lsai-plain');
-          live.body.replaceChildren(renderMarkdown({ doc: this.#doc, editor: this.#d.editor }, live.text));
-          live.dots.remove();
-          live.root.classList.remove('lsai-streaming');
-          // Like change groups: once the reply is done, several steps fold to their head line.
-          if (live.stepRows.size >= 2 && !live.stepsTouched) {
-            setTimeout(() => {
-              if (!live.stepsTouched) live.steps.classList.add('lsai-collapsed');
-            }, COLLAPSE_MS);
-          }
-          const reason = String(ev.data.stopReason ?? 'end');
-          if (reason !== 'end') live.root.appendChild(this.#h('div', 'lsai-meta', `(${reason})`));
-        }
-        this.#live = null;
-        this.#setBusy(false);
-        break;
-      }
-      default:
-        break;
-    }
-    this.#scroll(near);
+    const el = this.#h('div', 'lsai-group');
+    el.dataset.group = n.id;
+    const strip = this.#strip(n);
+    this.#strips.set(n.id, strip);
+    const body = this.#h('div', 'lsai-group-body');
+    for (const t of n.tabs) body.appendChild(this.#view(t).root);
+    el.append(strip, body);
+    return el;
   }
 
-  // ---------- approval cards ----------
-
-  #nearBottom(): boolean {
-    const l = this.#els.log;
-    return l.scrollHeight - l.scrollTop - l.clientHeight < 80;
+  #share(a: HTMLElement, b: HTMLElement, ratio: number): void {
+    a.style.flex = `${ratio} 1 0`;
+    b.style.flex = `${1 - ratio} 1 0`;
   }
 
-  #scroll(force: boolean): void {
-    if (force) this.#els.log.scrollTop = this.#els.log.scrollHeight;
+  /** Follows the pointer on the elements themselves, so the chats aren't rebuilt while you drag. */
+  #pressSash(e: PointerEvent, sash: HTMLElement, box: HTMLElement, a: HTMLElement, b: HTMLElement, split: Split, path: string): void {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    sash.setPointerCapture(e.pointerId);
+    let ratio: number | null = null;
+    const move = (ev: PointerEvent): void => {
+      const r = box.getBoundingClientRect();
+      ratio = clampRatio(split.dir === 'row' ? (ev.clientX - r.left) / r.width : (ev.clientY - r.top) / r.height);
+      this.#share(a, b, ratio);
+    };
+    const up = (): void => {
+      sash.removeEventListener('pointermove', move);
+      sash.removeEventListener('pointerup', up);
+      sash.removeEventListener('pointercancel', up);
+      if (ratio === null || !this.#layout) return;
+      this.#layout = setRatio(this.#layout, path, ratio);
+      this.#save();
+    };
+    sash.addEventListener('pointermove', move);
+    sash.addEventListener('pointerup', up);
+    sash.addEventListener('pointercancel', up);
+  }
+
+  #render(): void {
+    const layout = this.#layout;
+    if (!layout) return;
+    const views = [...this.#views.values()];
+    const typing = views.find((v) => v.focused);
+    for (const v of views) v.keepScroll();
+    // First, so the tab rows drawn below show what being seen changed.
+    for (const g of groups(layout)) for (const t of g.tabs) this.#view(t).setVisible(t.id === g.active);
+    this.#strips.clear();
+    this.#els.area.replaceChildren(this.#nodeEl(layout));
+    for (const v of views) v.restoreScroll();
+    typing?.focus();
+  }
+
+  #save(): void {
+    const text = JSON.stringify(this.#layout);
+    if (text === this.#savedLayout) return;
+    this.#savedLayout = text;
+    this.#d.prefs.set({ layout: text });
+  }
+
+  /** A tab's title, state or model changed: repaint the rows without touching the chats. */
+  #changed(): void {
+    const layout = this.#layout;
+    if (!layout) return;
+    for (const g of groups(layout)) {
+      const old = this.#strips.get(g.id);
+      if (!old) continue;
+      const strip = this.#strip(g);
+      old.replaceWith(strip);
+      this.#strips.set(g.id, strip);
+    }
+    this.#save();
+  }
+
+  #commit(layout: LayoutNode): void {
+    this.#layout = layout;
+    this.#render();
+    this.#save();
+  }
+
+  #showTab(id: string): void {
+    if (!this.#layout) return;
+    this.#focusTab = id;
+    this.#commit(activate(this.#layout, id));
+    this.#views.get(id)?.focus();
+  }
+
+  #newTab(groupId: string, chatId: string | null = null): void {
+    if (!this.#layout) return;
+    const tab: Tab = { id: newId(), chatId };
+    this.#focusTab = tab.id;
+    this.#commit(addTab(this.#layout, groupId, tab));
+    this.#views.get(tab.id)?.focus();
+  }
+
+  async #openChat(id: string): Promise<void> {
+    const layout = this.#layout;
+    if (!layout) return;
+    const open = allTabs(layout).find((t) => t.chatId === id);
+    if (open) return this.#showTab(open.id);
+    const g = this.#focusGroup(layout);
+    const shown = this.#views.get(g.active);
+    if (!shown?.unused) return this.#newTab(g.id, id);
+    await shown.openChat(id, this.#chats.find((c) => c.id === id)?.title ?? 'Chat');
+    this.#changed();
+  }
+
+  /** The chat stays in the list, and a reply still running carries on in the bridge. */
+  #closeTab(id: string): void {
+    if (!this.#layout) return;
+    const next = closeTab(this.#layout, id);
+    this.#views.get(id)?.destroy();
+    this.#views.delete(id);
+    const layout = next ?? newGroup(newId(), { id: newId(), chatId: null });
+    if (this.#focusTab === id) this.#focusTab = this.#focusGroup(layout).active;
+    this.#commit(layout);
+  }
+
+  // ---------- dragging a tab ----------
+
+  /** Where a tab would land. Over a tab row it joins at that spot; over a chat, the part decides. */
+  #dropAt(x: number, y: number, tabId: string): Drop | null {
+    const el = this.#doc.elementFromPoint(x, y);
+    const group = el?.closest<HTMLElement>('.lsai-group');
+    const groupId = group?.dataset.group;
+    const body = group?.querySelector('.lsai-group-body');
+    if (!group || !groupId || !body) return null;
+    const strip = el?.closest('.lsai-tabs');
+    const rect = body.getBoundingClientRect();
+    if (!strip) return { groupId, zone: zoneAt(rect, x, y), rect };
+    const others = [...strip.querySelectorAll<HTMLElement>('.lsai-tab')].filter((t) => t.dataset.tab !== tabId);
+    const index = others.filter((t) => {
+      const r = t.getBoundingClientRect();
+      return x > r.left + r.width / 2;
+    }).length;
+    return { groupId, zone: 'center', index, rect };
+  }
+
+  #markDrop(mark: HTMLElement, drop: Drop | null): void {
+    mark.hidden = drop === null;
+    if (!drop) return;
+    const { width, height } = drop.rect;
+    const base = this.root.getBoundingClientRect();
+    const left = drop.rect.left - base.left + (drop.zone === 'right' ? width / 2 : 0);
+    const top = drop.rect.top - base.top + (drop.zone === 'bottom' ? height / 2 : 0);
+    const wide = drop.zone === 'left' || drop.zone === 'right' ? width / 2 : width;
+    const tall = drop.zone === 'top' || drop.zone === 'bottom' ? height / 2 : height;
+    mark.style.cssText = `left:${left}px;top:${top}px;width:${wide}px;height:${tall}px`;
+  }
+
+  /** A press that doesn't move is a click. Pointer events rather than HTML drag and drop, which Logseq uses for blocks. */
+  #pressTab(e: PointerEvent, tab: Tab): void {
+    if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return;
+    const doc = this.#doc;
+    const start = { x: e.clientX, y: e.clientY };
+    const mark = this.#h('div', 'lsai-drop');
+    let ghost: HTMLElement | null = null;
+    let drop: Drop | null = null;
+    const end = (): void => {
+      doc.removeEventListener('pointermove', move);
+      doc.removeEventListener('pointerup', up);
+      doc.removeEventListener('pointercancel', end);
+      doc.removeEventListener('keydown', escape, true);
+      ghost?.remove();
+      mark.remove();
+      this.root.classList.remove('lsai-dragging');
+    };
+    const move = (ev: PointerEvent): void => {
+      if (!ghost) {
+        if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < DRAG_START_PX) return;
+        ghost = this.#h('div', 'lsai-ghost', this.#views.get(tab.id)?.title ?? '');
+        this.root.append(mark, ghost);
+        this.root.classList.add('lsai-dragging');
+      }
+      // Inside the panel, so it stays readable next to the window's edge.
+      const base = this.root.getBoundingClientRect();
+      ghost.style.left = `${Math.max(0, Math.min(ev.clientX - base.left + 10, base.width - ghost.offsetWidth - 4))}px`;
+      ghost.style.top = `${ev.clientY - base.top + 10}px`;
+      drop = this.#dropAt(ev.clientX, ev.clientY, tab.id);
+      this.#markDrop(mark, drop);
+    };
+    const up = (): void => {
+      const dragged = ghost !== null;
+      end();
+      if (!dragged) return this.#showTab(tab.id);
+      if (!drop || !this.#layout) return;
+      this.#focusTab = tab.id;
+      this.#commit(moveTab(this.#layout, tab.id, drop.groupId, drop.zone, newId(), drop.index));
+    };
+    const escape = (ev: KeyboardEvent): void => {
+      if (ev.key === 'Escape') end();
+    };
+    doc.addEventListener('pointermove', move);
+    doc.addEventListener('pointerup', up);
+    doc.addEventListener('pointercancel', end);
+    doc.addEventListener('keydown', escape, true);
   }
 }

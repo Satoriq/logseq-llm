@@ -6,9 +6,8 @@ import { mountPanel } from './host';
 import type { Mount } from './host';
 import css from './panel.css';
 import { Panel } from './panel';
-import type { Prefs } from './panel';
 import { APPS_CHAT_ID } from './types';
-import type { BridgeEvent, Effort, EditorPort, PanelSide } from './types';
+import type { BridgeEvent, Effort, EditorPort, PanelSide, Prefs } from './types';
 
 /** Plugin entry: settings, toolbar button, commands, and the panel inside Logseq's DOM. */
 
@@ -63,6 +62,7 @@ type Settings = {
   prefChatId?: string;
   prefIncludePage?: boolean;
   prefWeb?: boolean;
+  prefLayout?: string;
 };
 
 const CONNECTION_KEYS = ['bridgeUrl', 'bridgeToken'] as const;
@@ -170,6 +170,7 @@ export async function main(): Promise<void> {
         ...(s.prefChatId ? { chatId: s.prefChatId } : {}),
         includePage: s.prefIncludePage !== false,
         web: s.prefWeb === true,
+        ...(s.prefLayout ? { layout: s.prefLayout } : {}),
       };
     },
     set: (p: Partial<Prefs>): void => {
@@ -180,6 +181,7 @@ export async function main(): Promise<void> {
       if (p.chatId !== undefined) patch.prefChatId = p.chatId;
       if (p.includePage !== undefined) patch.prefIncludePage = p.includePage;
       if (p.web !== undefined) patch.prefWeb = p.web;
+      if (p.layout !== undefined) patch.prefLayout = p.layout;
       logseq.updateSettings(patch);
     },
   };

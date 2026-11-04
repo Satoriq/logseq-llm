@@ -44,7 +44,7 @@ export const anthropicWire: Wire = (o: WireOptions): WireSession => {
           stream: true,
           system: o.system,
           messages,
-          tools,
+          ...(tools.length > 0 ? { tools } : {}),
           // Caches the prompt, tools and earlier steps, so each round of a tool loop costs far less.
           cache_control: { type: 'ephemeral' },
           thinking: thinkingFor(o),

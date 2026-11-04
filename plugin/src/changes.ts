@@ -4,6 +4,7 @@ import type { ApprovalView, BridgeEvent } from './types';
 /**
  * Change cards: one per proposed write.
  * - Manual: Reject / Apply / "Apply all" (this and every further change in this answer).
+ *   A question for a cloud model is No / Yes, for itself only, with its text folded.
  * - Auto (autoApply, or after "Apply all"): progress ("Applying in 2s…", "7/25") and Abort.
  * - A finished card collapses to one line after 1 s; click the line to open or close it.
  * - Two or more cards in one answer sit in a group, "5 changes · ✓ 4 · ✗ 1", which collapses
@@ -108,8 +109,9 @@ export class ChangeCards {
 
     const body = this.#h('div', 'lsai-card-body');
     // Auto cards keep the preview folded ("Preview"); manual cards show it, since you decide on it.
-    const preview: HTMLElement = a.auto ? this.#h('details', 'lsai-card-more') : body;
-    if (a.auto) preview.appendChild(this.#h('summary', undefined, 'Preview'));
+    const folded = a.auto === true || a.alwaysAsk === true;
+    const preview: HTMLElement = folded ? this.#h('details', 'lsai-card-more') : body;
+    if (folded) preview.appendChild(this.#h('summary', undefined, a.alwaysAsk ? 'Show the question' : 'Preview'));
     preview.appendChild(this.#h('div', 'lsai-card-target', a.target));
     const b = a.body;
     const pairs = b.kind === 'diffs' ? b.items : b.kind === 'diff' ? [{ before: b.before, after: b.after }] : null;
@@ -129,7 +131,7 @@ export class ChangeCards {
       for (const w of a.warnings) ul.appendChild(this.#h('li', undefined, `⚠ ${w}`));
       preview.appendChild(ul);
     }
-    if (a.auto) body.appendChild(preview);
+    if (folded) body.appendChild(preview);
     const actions = this.#h('div', 'lsai-card-actions');
     const status = this.#h('div', 'lsai-card-status');
     body.append(actions, status);
@@ -154,6 +156,10 @@ export class ChangeCards {
           else clearInterval(card.countdown);
         }, 1000);
       }
+    } else if (a.alwaysAsk) {
+      const no = this.#button('lsai-reject', 'No', 'Keep this on your Mac', () => void this.#send(card, 'reject'));
+      const yes = this.#button('lsai-apply', 'Yes', 'Send the question to the cloud model', () => void this.#send(card, 'apply'));
+      actions.append(no, yes);
     } else {
       const note = this.#h('input', 'lsai-note');
       note.type = 'text';
@@ -171,7 +177,7 @@ export class ChangeCards {
   async #send(card: Card, decision: 'apply' | 'reject' | 'apply-all' | 'abort', note?: string): Promise<void> {
     const buttons = [...card.actions.querySelectorAll('button')];
     for (const x of buttons) x.disabled = true;
-    card.state.textContent = decision === 'reject' ? 'rejecting…' : decision === 'abort' ? 'aborting…' : 'applying…';
+    card.state.textContent = decision === 'reject' ? 'rejecting…' : decision === 'abort' ? 'aborting…' : card.view.alwaysAsk ? 'sending…' : 'applying…';
     try {
       await this.#bridge()?.decide(card.view.id, decision, note || undefined);
     } catch (err) {
@@ -190,7 +196,7 @@ export class ChangeCards {
         const c = this.#cards.get(String(ev.data.id));
         if (!c) return true;
         clearInterval(c.countdown);
-        c.state.textContent = 'applying…';
+        c.state.textContent = c.view.alwaysAsk ? 'waiting for the answer…' : 'applying…';
         // Abort can only stop a batch between items; a single change runs in one step.
         const batch = c.view.body.kind === 'diffs' && c.view.body.items.length > 1;
         if (!batch) c.actions.replaceChildren();
@@ -211,12 +217,12 @@ export class ChangeCards {
         c.icon.textContent = outcome === 'applied' ? '✓' : '✗';
         c.state.textContent =
           outcome === 'applied'
-            ? c.view.auto ? 'auto-applied' : 'applied'
+            ? c.view.auto ? 'auto-applied' : c.view.alwaysAsk ? 'answered' : 'applied'
             : outcome === 'aborted'
               ? `aborted${detail && detail !== 'aborted' ? ` (${detail})` : ''}`
               : outcome === 'failed'
                 ? 'failed'
-                : 'not applied';
+                : c.view.alwaysAsk ? 'not sent' : 'not applied';
         c.status.textContent = outcome === 'failed' ? `Failed: ${detail}` : outcome === 'applied' && !c.view.auto ? `Done: ${detail}` : '';
         c.actions.replaceChildren();
         c.root.classList.add(`lsai-card-${outcome}`);

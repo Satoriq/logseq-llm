@@ -389,13 +389,13 @@ test('Stop ends a reply mid-stream', async () => {
   assert.equal((await run('mistral', 'mistral-large-latest', 'auto', { signal: ac.signal })).result.stopReason, 'cancelled');
 });
 
-test('earlier turns and context go along; the history has a limit', async () => {
+test('all earlier turns and the context go along', async () => {
   api.script = [chatText('ok')];
   const many = Array.from({ length: 60 }, (_, i): StoredMessage => ({ id: String(i), role: i % 2 ? 'assistant' : 'user', ts: 0, parts: [{ type: 'text', text: `m${i}` }], meta: { locality: 'cloud' } }));
   const uuid = sampleEntities()[0]?.uuid as string;
   await run('mistral', 'mistral-large-latest', 'auto', { messages: [...many, user('now', { contextUuids: [uuid] })], context: 'THE PAGE' });
   const sent = api.requests[0]?.body.messages;
-  assert.equal(sent.length, 1 + 40 + 1, 'system, 40 earlier messages, the new one');
+  assert.equal(sent.length, 1 + 60 + 1, 'system, every earlier message, the new one');
   assert.match(sent.at(-1).content, /<context>\nTHE PAGE\n<\/context>/);
   assert.match(sent.at(-1).content, /now$/);
 });

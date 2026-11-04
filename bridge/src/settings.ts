@@ -12,6 +12,9 @@ import { writeFileAtomic } from './config.ts';
 
 export type AutoApprove = { writes: boolean; edits: boolean; deletes: boolean };
 
+/** The cloud model a local model may ask. */
+export type ConsultTarget = { provider: string; model: string };
+
 export class SettingsError extends Error {}
 
 export function cleanAutoApprove(raw: unknown): AutoApprove {
@@ -38,13 +41,22 @@ export class Settings {
     this.#fallback = opts.fallback;
   }
 
-  async #all(): Promise<Record<string, unknown>> {
+  async #read(): Promise<{ autoApprove?: unknown; consult?: unknown }> {
     try {
-      const parsed = JSON.parse(await readFile(this.#file, 'utf8')) as { autoApprove?: unknown };
-      return parsed.autoApprove !== null && typeof parsed.autoApprove === 'object' ? (parsed.autoApprove as Record<string, unknown>) : {};
+      const parsed = JSON.parse(await readFile(this.#file, 'utf8')) as unknown;
+      return parsed !== null && typeof parsed === 'object' ? parsed : {};
     } catch {
       return {};
     }
+  }
+
+  async #all(): Promise<Record<string, unknown>> {
+    const { autoApprove } = await this.#read();
+    return autoApprove !== null && typeof autoApprove === 'object' ? (autoApprove as Record<string, unknown>) : {};
+  }
+
+  async #write(patch: { autoApprove?: unknown; consult?: unknown }): Promise<void> {
+    await writeFileAtomic(this.#file, `${JSON.stringify({ ...(await this.#read()), ...patch }, null, 2)}\n`);
   }
 
   /** What you saved for this graph. Null if you never did, or the file is damaged: nothing here grants more than config.json. */
@@ -65,8 +77,19 @@ export class Settings {
   async setAutoApprove(raw: unknown): Promise<AutoApprove> {
     if (this.graph === null) throw new SettingsError('No graph is set in config.json.');
     const value = cleanAutoApprove(raw);
-    const all = { ...(await this.#all()), [this.graph]: value };
-    await writeFileAtomic(this.#file, `${JSON.stringify({ autoApprove: all }, null, 2)}\n`);
+    await this.#write({ autoApprove: { ...(await this.#all()), [this.graph]: value } });
     return value;
+  }
+
+  /** undefined: never chosen. null: off, and a damaged value counts as off, so text only goes where you sent it. */
+  async consult(): Promise<ConsultTarget | null | undefined> {
+    const { consult: v } = await this.#read();
+    if (v === undefined) return undefined;
+    const t = v as Partial<ConsultTarget> | null;
+    return typeof t?.provider === 'string' && typeof t.model === 'string' ? { provider: t.provider, model: t.model } : null;
+  }
+
+  async setConsult(target: ConsultTarget | null): Promise<void> {
+    await this.#write({ consult: target });
   }
 }

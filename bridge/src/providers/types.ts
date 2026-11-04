@@ -44,6 +44,13 @@ export type TurnResult = {
   error?: string;
 };
 
+export type ConsultRequest = { model: string; question: string; signal?: AbortSignal };
+
+/** The whole of what a consulted model is told about the situation. */
+export const CONSULT_PROMPT =
+  "Another AI assistant, running on the user's own computer, is asking you for help. " +
+  'Answer the question directly and briefly. You have no tools and no other context.';
+
 export interface Provider {
   readonly id: string;
   readonly label: string;
@@ -53,4 +60,8 @@ export interface Provider {
   readonly webSearch?: boolean;
   models(): Promise<ModelInfo[]>;
   runTurn(req: TurnRequest): Promise<TurnResult>;
+  /** You agreed to share a chat's earlier text with this provider. */
+  onShared?(chatId: string): Promise<void>;
+  /** One question and one answer: no chat, no notes, no tools. */
+  consult?(req: ConsultRequest): Promise<string>;
 }

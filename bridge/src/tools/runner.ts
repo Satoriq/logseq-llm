@@ -26,22 +26,36 @@ export type ToolCaller = {
   turnId: string;
   /** A connected app: no tool steps (it has no reply to show them in), and its name on cards and in the audit log. */
   client?: string;
+  signal?: AbortSignal;
 };
 
 export type ToolResult = { text: string; isError: boolean };
 
+export type LocalTool = ToolDef & { available: () => Promise<boolean> };
+
 export class ToolRunner {
   readonly tools: ToolDef[];
+  /** Offered to local models only, when `available` says so. */
+  #localOnly: LocalTool[];
   #audit: AuditLog;
   #events: (chatId: string) => EventLog;
   #approvals: Approvals | undefined;
 
-  constructor(opts: { tools: ToolDef[]; audit: AuditLog; events: (chatId: string) => EventLog; approvals?: Approvals }) {
+  constructor(opts: { tools: ToolDef[]; localOnly?: LocalTool[]; audit: AuditLog; events: (chatId: string) => EventLog; approvals?: Approvals }) {
     // Write tools only when approvals are wired: every write waits for Apply in the panel.
     this.#approvals = opts.approvals;
     this.tools = opts.tools.filter((t) => t.kind === 'read' || (t.kind === 'write' && opts.approvals !== undefined));
+    this.#localOnly = opts.approvals ? (opts.localOnly ?? []) : [];
     this.#audit = opts.audit;
     this.#events = opts.events;
+  }
+
+  /** What a model at this locality can call. */
+  async toolsFor(locality: Locality): Promise<ToolDef[]> {
+    if (locality !== 'local') return this.tools;
+    const extra: ToolDef[] = [];
+    for (const t of this.#localOnly) if (await t.available()) extra.push(t);
+    return [...this.tools, ...extra];
   }
 
   /** Ends "Apply all" for a turn with no end of its own. */
@@ -51,7 +65,7 @@ export class ToolRunner {
 
   /** A call from a provider's own tool loop: a model can name anything and send anything. */
   async call(name: string, raw: unknown, caller: ToolCaller): Promise<ToolResult> {
-    const tool = this.tools.find((t) => t.name === name);
+    const tool = (caller.locality === 'local' ? [...this.tools, ...this.#localOnly] : this.tools).find((t) => t.name === name);
     if (!tool) return { text: `there is no tool called "${name}". Use one of the tools you were given.`, isError: true };
     let args = raw ?? {};
     if (typeof args === 'string') {
@@ -86,6 +100,7 @@ export class ToolRunner {
         chatId,
         turnId,
         ...(client ? { client } : {}),
+        ...(caller.signal ? { signal: caller.signal } : {}),
         ...(approvals
           ? {
               approve: (req) => {

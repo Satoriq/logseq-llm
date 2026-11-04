@@ -1,4 +1,4 @@
-import type { AutoApprove, BridgeEvent, ChatMeta, ChatState, Effort, InstructionsState, ProviderInfo, SettingsState } from './types';
+import type { AutoApprove, BridgeEvent, ChatMeta, ChatState, ConsultTarget, Effort, InstructionsState, ProviderInfo, SettingsState, ShareState } from './types';
 
 /**
  * Client for the local bridge.
@@ -127,6 +127,18 @@ export class BridgeClient {
 
   saveAutoApprove(autoApprove: AutoApprove): Promise<SettingsState> {
     return this.#call('POST', '/v1/settings', { autoApprove });
+  }
+
+  saveConsult(consult: ConsultTarget | null): Promise<SettingsState> {
+    return this.#call('POST', '/v1/settings', { consult });
+  }
+
+  shareState(id: string, provider: string): Promise<ShareState> {
+    return this.#call('GET', `/v1/chats/${encodeURIComponent(id)}/share?provider=${encodeURIComponent(provider)}`);
+  }
+
+  share(id: string, provider: string, yes: boolean): Promise<ShareState> {
+    return this.#call('POST', `/v1/chats/${encodeURIComponent(id)}/share`, { provider, share: yes });
   }
 
   cancel(id: string): Promise<{ cancelled: boolean }> {

@@ -211,7 +211,7 @@ test('a local stretch stays local: neither your messages nor the replies reach C
   assert.ok(!prompt.includes('my private question'));
   assert.ok(!prompt.includes('You said:'));
   assert.match(prompt, /now with claude$/);
-  assert.ok(events.some((e) => e.type === 'notice' && /stays on this Mac/.test(String(e.data.message))), 'you are told');
+  assert.ok(events.some((e) => e.type === 'notice' && /can't see the earlier messages/.test(String(e.data.message))), 'you are told');
 
   // The same when Claude comes back to a chat it already knows.
   await turn(chat.id, 'another private one', { provider: 'echo' });

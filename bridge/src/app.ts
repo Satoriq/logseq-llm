@@ -11,6 +11,7 @@ import { GraphReader } from './graph/reader.ts';
 import { createBridgeServer, listen } from './http/server.ts';
 import { APPS_CHAT_ID, readClientTokens } from './mcp/clients.ts';
 import { McpEndpoint } from './mcp/endpoint.ts';
+import { Consult, consultTool } from './tools/consult.ts';
 import { ToolRunner } from './tools/runner.ts';
 import type { TurnInfo } from './providers/types.ts';
 import { Policy } from './policy/policy.ts';
@@ -112,7 +113,8 @@ export async function createRuntime(opts: { config: BridgeConfig; paths: DataPat
   const events = (chatId: string) => (turns as TurnRunner).eventLog(chatId);
   const approvals = new Approvals({ events });
   await store.ensure(APPS_CHAT_ID, 'Connected apps');
-  const runner = new ToolRunner({ tools: graph.tools, audit, events, approvals });
+  const consult = new Consult({ settings, providers: () => turns?.providers() ?? [] });
+  const runner = new ToolRunner({ tools: graph.tools, localOnly: [consultTool(consult, audit)], audit, events, approvals });
   const mcp = new McpEndpoint({ runner, clients: () => readClientTokens(paths.mcpClients) });
 
   const getBlock = graph.tools.find((t) => t.name === 'get_block');
@@ -168,7 +170,7 @@ export async function createRuntime(opts: { config: BridgeConfig; paths: DataPat
     // A cancelled or finished turn can't apply anything any more.
     onSettled: (chatId) => approvals.rejectAll(chatId, 'cancelled'),
   });
-  const server = createBridgeServer({ port, allowedOrigins: config.allowedOrigins, tokens, store, turns, mcp, approvals, instructions, settings, writable: config.graph !== null && config.writeGraphs.includes(config.graph), audit, memoryPage: graph.memory?.title ?? null });
+  const server = createBridgeServer({ port, allowedOrigins: config.allowedOrigins, tokens, store, turns, mcp, approvals, instructions, settings, consult, writable: config.graph !== null && config.writeGraphs.includes(config.graph), audit, memoryPage: graph.memory?.title ?? null });
   return {
     server,
     turns,

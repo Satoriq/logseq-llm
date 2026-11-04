@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "webpack --mode=development --watch",
     "build": "webpack --mode=production",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test \"test/**/*.test.ts\""
   },
   "logseq": {
     "id": "logseq-ai-panel",

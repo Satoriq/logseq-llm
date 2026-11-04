@@ -782,10 +782,10 @@ Run these from the `bridge` folder.
 node --test "test/**/*.test.ts"
 ```
 
-Expected: `pass 153`, `fail 0`.
+Expected: `pass 176`, `fail 0`.
 
 2. Load the new build, then switch the plugin off and on. The status line should show
-   `panel 0.10.1 · bridge 0.15.0`.
+   `panel 0.11.1 · bridge 0.16.1`.
 
 ```bash
 cd ../plugin && npm run build && cd ../bridge && node bin/logseq-ai-bridge.ts agent restart
@@ -927,7 +927,7 @@ security delete-generic-password -s logseq-ai -a anthropic
 `remove_blocks` takes a list of up to 100 blocks: one card, one change in Logseq. Everything
 under a listed block goes with it.
 
-1. Switch the plugin off and on. The status line should read `panel 0.10.1 · bridge 0.15.0`.
+1. Switch the plugin off and on. The status line should read `panel 0.11.1 · bridge 0.16.1`.
 2. On a test page in AI Sandbox, add five top-level lines, and give the third one a child.
 3. Ask for *"Delete the first four lines of this page"*, with any model.
    - One card should appear, titled "Delete 5 blocks", listing them in page order with the
@@ -941,9 +941,72 @@ under a listed block goes with it.
 6. **Hidden blocks:** ask it to delete a `#private` block by id, together with a normal one.
    The model is told there's no such block, no card appears and nothing is deleted.
 
+### 4o. Switching models: share the chat or not
+
+A model only sees what was said to it. When you switch a chat to a model that hasn't seen some of
+it, the panel asks. Nothing goes until you say yes, and that's enforced in the bridge.
+
+1. Switch the plugin off and on. The status line should read `panel 0.11.1 · bridge 0.16.1`.
+2. In a new tab, pick **Ollama** and send *"My test word is pineapple."*
+3. Switch the same tab to **Claude**. A question appears above the input: *"Share this chat with
+   Claude? It hasn't seen 2 earlier messages. They may quote your #private notes."* **Send** is
+   greyed out until you answer.
+4. Press **No**, then ask *"What is my test word?"* Claude doesn't know, and the chat says it
+   can't see the earlier messages.
+5. Switch to Ollama: no question, because that stays on your Mac. Send anything.
+6. Switch back to Claude. It asks again, because there's something new. Press **Yes**, then ask
+   *"What is my test word?"* It answers pineapple. A Yes sends all the text, however long the chat.
+7. Two cloud models count as separate too. With an API key set, switching from Claude to another
+   cloud model asks the same question.
+
+Your answers are in the audit log, with no chat text:
+
+```bash
+grep '"kind":"consent"' ~/Library/Application\ Support/logseq-ai/audit.jsonl | tail -3
+```
+
+### 4p. Consult a cloud model
+
+A local model can ask a cloud model one question. Only that text leaves your Mac.
+
+1. In ⚙, **Consult a cloud model** shows Off and your cloud models. Claude's first model is the
+   default.
+2. In an Ollama tab, ask *"Ask the cloud model what the tallest mountain is, then tell me."*
+3. A card appears, titled "Ask Claude Sonnet (latest)?", with **No** and **Yes**. **Show the
+   question** opens the exact text if you want to read it. There's no Apply all, and no
+   auto-approve setting skips this card.
+4. Press **Yes**. The card ends as "answered" and the local model uses the answer.
+5. Ask again and press **No**. Nothing leaves your Mac, and the local model carries on.
+6. Set the consult model to **Off** in ⚙. The local model no longer has the tool.
+
+A small model may not use the tool every time you ask. If it answers on its own, ask again more
+directly.
+
+### 4q. Tabs and splits
+
+Each tab is its own chat with its own model, and several can run at once.
+
+1. **New tab:** press **＋** in the tab row. Pick a different model there and send a message.
+2. **Split:** drag a tab onto the right half of the chat below it. A blue area shows where it will
+   land. Let go: each chat takes half the width.
+3. **Top and bottom:** drag a tab to the top or bottom edge to split the height. Halves can be
+   split again.
+4. **Resize:** drag the line between two chats. Double-click it to go back to half and half.
+   Neither side can be dragged away completely.
+5. **At the same time:** send a message in both halves. Each replies on its own.
+6. **Join:** drag a tab to the middle of a chat, or onto a tab row, to put it back among those tabs.
+7. **Close:** press **×** on a tab. If it was the only one in its half, the other chat takes the
+   space back. The chat isn't deleted: it's still in **Open a chat…** at the top.
+8. **A card in a hidden tab:** start a change in one tab, then look at another. The first tab
+   shows a **?** until you go back.
+9. **Restart:** switch the plugin off and on. Your tabs, splits, sizes and models come back.
+
+Pressing Esc during a drag cancels it. Closing a tab during a reply doesn't stop the
+reply, but a change that needs a card can't be approved until you open that chat again.
+
 ### Which build is running?
 
-The panel's status line shows `● Connected · panel 0.10.1 · bridge 0.15.0`. If
+The panel's status line shows `● Connected · panel 0.11.1 · bridge 0.16.1`. If
 it shows no version numbers, Logseq still runs an old plugin build. Run
 `npm run build` in `plugin/`, then switch the plugin off and on. Approval cards
 need panel ≥ 0.2.0; batched edits need 0.3.0; Apply all, Abort and folding need 0.4.0; the ✎ instructions editor needs 0.5.0 and bridge 0.7.0; 🌐 web search needs 0.6.0 and bridge 0.8.0; the memory link needs 0.7.0 (memory itself is bridge 0.9.0); cards from connected apps need 0.8.0 and bridge 0.11.0; ⚙ settings need 0.9.0 and bridge 0.13.0; noticing a restarted bridge needs 0.10.0 and bridge 0.14.0.

@@ -39,13 +39,38 @@ export type StoredMessage = {
 };
 
 /**
- * What a provider may see of a chat. A cloud model gets only what was already said to a cloud
- * model. Replies from local models stay local, and so do your messages to them: they can quote
- * private notes, and no filter can redact what you typed. Anything unlabeled counts as local.
+ * What a provider may see of a chat. A local model gets all of it, because it stays on this Mac.
+ * A cloud model gets what was said to it, plus the first `upTo` messages if you agreed to share
+ * them. The rest stays away from it: replies can quote private notes, and no filter can redact
+ * what you typed. Anything unlabeled counts as local.
  */
-export function transcriptFor(messages: StoredMessage[], locality: Locality): StoredMessage[] {
-  return locality === 'local' ? messages : messages.filter((m) => m.meta?.locality === 'cloud');
+export function transcriptFor(messages: StoredMessage[], viewer: { id: string; locality: Locality }, upTo = 0): StoredMessage[] {
+  if (viewer.locality === 'local') return messages;
+  const sentTo = audience(messages);
+  return messages.filter((m, i) => {
+    const to = sentTo(m);
+    return i < upTo || (to.locality === 'cloud' && to.provider === viewer.id);
+  });
 }
+
+/** Who each message was for. Your older messages carry no labels, but the reply in the same turn does. */
+export function audience(messages: StoredMessage[]): (m: StoredMessage) => { locality?: Locality; provider?: string } {
+  const replies = new Map(messages.filter((m) => m.role === 'assistant').map((m) => [m.meta?.turnId, m.meta]));
+  return (m) => {
+    const reply = replies.get(m.meta?.turnId);
+    const locality = m.meta?.locality ?? reply?.locality;
+    const provider = m.meta?.provider ?? reply?.provider;
+    return { ...(locality ? { locality } : {}), ...(provider ? { provider } : {}) };
+  };
+}
+
+/** What you decided about sharing this chat with one provider, in messages from the start. */
+export type ChatShare = {
+  /** You were asked when the chat had this many messages. */
+  asked: number;
+  /** The provider may see this many, whoever they were written for. */
+  upTo: number;
+};
 
 export type ChatMeta = {
   id: string;
@@ -59,6 +84,8 @@ export type ChatMeta = {
   claudeSessionId?: string;
   /** UUIDs of blocks/pages the AI created in this chat (for autoApply "own"). */
   aiCreated?: string[];
+  /** Per provider id. */
+  shares?: Record<string, ChatShare>;
 };
 
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

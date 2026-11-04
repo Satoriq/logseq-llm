@@ -3,7 +3,7 @@ import type { AuditLog } from '../audit.ts';
 import { EventLog } from '../events.ts';
 import { log } from '../log.ts';
 import type { Effort, Provider, ProviderEvent } from '../providers/types.ts';
-import { transcriptFor } from './store.ts';
+import { audience, transcriptFor } from './store.ts';
 import type { ChatStore } from './store.ts';
 
 export type StartTurnInput = {
@@ -70,12 +70,46 @@ export class TurnRunner {
     return this.#active.has(chatId);
   }
 
+  #provider(id: string): Provider {
+    const provider = this.#providers.get(id);
+    if (!provider) throw new TurnError(400, `unknown provider "${id}"`);
+    return provider;
+  }
+
+  /** What a provider can't see of this chat. `ask` is true if some of that is new since you last decided. */
+  async shareState(chatId: string, providerId: string): Promise<{ ask: boolean; unseen: number; local: boolean }> {
+    const provider = this.#provider(providerId);
+    const chat = await this.#store.get(chatId);
+    const share = chat?.shares?.[provider.id];
+    const all = await this.#store.messages(chatId);
+    const seen = new Set(transcriptFor(all, provider, share?.upTo));
+    const unseen = all.filter((m) => !seen.has(m));
+    const sentTo = audience(all);
+    return {
+      ask: all.slice(share?.asked ?? 0).some((m) => !seen.has(m)),
+      unseen: unseen.length,
+      local: unseen.some((m) => sentTo(m).locality !== 'cloud'),
+    };
+  }
+
+  /** Your answer. Yes covers everything said so far; what comes later needs its own answer. */
+  async share(chatId: string, providerId: string, yes: boolean): Promise<void> {
+    const provider = this.#provider(providerId);
+    if (this.#active.has(chatId)) throw new TurnError(409, 'a turn is running in this chat');
+    const chat = await this.#store.get(chatId);
+    if (!chat) throw new TurnError(404, 'chat not found');
+    const count = (await this.#store.messages(chatId)).length;
+    const upTo = yes ? count : (chat.shares?.[provider.id]?.upTo ?? 0);
+    await this.#store.update(chatId, { shares: { ...chat.shares, [provider.id]: { asked: count, upTo } } });
+    await this.#audit.record({ kind: 'consent', chatId, provider: provider.id, outcome: yes ? `shared ${count} messages` : 'not shared' });
+    if (yes) await provider.onShared?.(chatId);
+  }
+
   async start(chatId: string, input: StartTurnInput): Promise<{ turnId: string; done: Promise<void> }> {
     const chat = await this.#store.get(chatId);
     if (!chat) throw new TurnError(404, 'chat not found');
     if (this.#active.has(chatId)) throw new TurnError(409, 'a turn is already running in this chat');
-    const provider = this.#providers.get(input.providerId);
-    if (!provider) throw new TurnError(400, `unknown provider "${input.providerId}"`);
+    const provider = this.#provider(input.providerId);
     const models = await provider.models();
     const model = models.find((m) => m.id === (input.model ?? models[0]?.id));
     if (!model) throw new TurnError(400, `unknown model "${input.model ?? ''}" for provider "${provider.id}"`);
@@ -94,7 +128,7 @@ export class TurnRunner {
       await this.#store.append(chatId, {
         role: 'user',
         parts: [{ type: 'text', text: input.text }],
-        meta: { turnId, locality: provider.locality, contextUuids: input.contextUuids, ...(web ? { web: true } : {}) },
+        meta: { turnId, provider: provider.id, locality: provider.locality, contextUuids: input.contextUuids, ...(web ? { web: true } : {}) },
       });
       await this.#store.update(chatId, { provider: provider.id, model: model.id, effort: input.effort });
     } catch (err) {
@@ -146,9 +180,11 @@ export class TurnRunner {
     let usage: Record<string, number> | undefined;
     try {
       const all = await this.#store.messages(chatId);
-      const messages = transcriptFor(all, provider.locality);
-      if (provider.locality === 'cloud' && all.at(-2)?.meta?.locality === 'local') {
-        events.append('notice', { message: `${provider.label} can't see what you said to the local model. That part of the chat stays on this Mac.` }, turnId);
+      const chat = await this.#store.get(chatId);
+      const messages = transcriptFor(all, provider, chat?.shares?.[provider.id]?.upTo);
+      const before = all.at(-2);
+      if (before && !messages.includes(before)) {
+        events.append('notice', { message: `${provider.label} can't see the earlier messages in this chat, because you didn't share them.` }, turnId);
       }
       const emit = (ev: ProviderEvent): void => {
         if (controller.signal.aborted) return;

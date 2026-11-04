@@ -9,6 +9,15 @@ const get = (name) => {
   return i === -1 ? undefined : argv[i + 1];
 };
 const prompt = readFileSync(0, 'utf8');
+if (argv.includes('--no-session-persistence')) {
+  // A consult: no MCP config at all. Report the tools it was given, then answer.
+  writeFileSync('fake-claude-consult.json', JSON.stringify({ argv, prompt }));
+  const say = (o) => process.stdout.write(JSON.stringify(o) + '\n');
+  say({ type: 'system', subtype: 'init', tools: prompt.includes('FAKE:badtool') ? ['Bash'] : [] });
+  if (prompt.includes('FAKE:badtool')) await new Promise((r) => setTimeout(r, 10_000));
+  say({ type: 'result', subtype: 'success', is_error: false, result: `Answer to: ${prompt}` });
+  process.exit(0);
+}
 const mcp = JSON.parse(readFileSync(get('--mcp-config'), 'utf8')).mcpServers.lsq;
 writeFileSync('fake-claude-argv.json', JSON.stringify(argv));
 writeFileSync('fake-claude-env.json', JSON.stringify(Object.keys(process.env)));

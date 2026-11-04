@@ -21,7 +21,7 @@ and the next steps. [`docs/PLAN.md`](docs/PLAN.md) holds the full plan and the d
 ## Working on it
 
 - Bridge tests: `cd bridge && node --test "test/**/*.test.ts"` (no dependencies; TypeScript runs directly).
-- Plugin: `cd plugin && npm run build`; type check with `node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json`.
+- Plugin: `cd plugin && npm run build`; type check with `node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json`; tests (tabs and splits) with `node --test "test/**/*.test.ts"`.
 - After a change: bump `BRIDGE_VERSION` (`bridge/src/config.ts`) / `PANEL_VERSION` (`plugin/src/version.ts`),
   add a TESTING.md section and a PLAN.md decisions-log row.
 - Privacy is enforced in the bridge (`bridge/src/policy/`, read/write tools), never only in prompts.

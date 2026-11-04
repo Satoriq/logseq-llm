@@ -8,7 +8,8 @@ import type { ChatStore, StoredMessage } from '../chats/store.ts';
 import { log } from '../log.ts';
 import { MCP_SERVER_NAME } from '../mcp/endpoint.ts';
 import type { McpSessions } from '../mcp/endpoint.ts';
-import type { Effort, ModelInfo, Provider, TurnInfo, TurnRequest, TurnResult } from './types.ts';
+import { CONSULT_PROMPT } from './types.ts';
+import type { ConsultRequest, Effort, ModelInfo, Provider, TurnInfo, TurnRequest, TurnResult } from './types.ts';
 
 /**
  * Claude through the user's own, unmodified `claude` binary (Pro plan), headless.
@@ -18,6 +19,8 @@ import type { Effort, ModelInfo, Provider, TurnInfo, TurnRequest, TurnResult } f
  * and no slash commands. Its only tools are the bridge's filtered graph tools at /mcp,
  * reached with a token that only works for this chat and this turn.
  */
+
+const CONSULT_TIMEOUT_MS = 5 * 60_000;
 
 const ALL_EFFORTS: Effort[] = ['auto', 'low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -89,6 +92,25 @@ export function claudeArgs(o: {
   return args;
 }
 
+/** One question, nothing else: no tools at all, no MCP servers, and no session kept. */
+export function consultArgs(o: { model: string; restricted: boolean }): string[] {
+  return [
+    '-p',
+    '--verbose',
+    '--input-format', 'text',
+    '--output-format', 'stream-json',
+    ...(o.restricted ? ['--restricted'] : []),
+    '--tools', '',
+    '--strict-mcp-config',
+    '--permission-mode', 'dontAsk',
+    '--permission-prompts', 'none',
+    '--disable-slash-commands',
+    '--no-session-persistence',
+    '--system-prompt', CONSULT_PROMPT,
+    '--model', o.model,
+  ];
+}
+
 function childEnv(): NodeJS.ProcessEnv {
   // No ANTHROPIC_API_KEY or other secrets: claude must use the Pro login from the Keychain.
   const env: NodeJS.ProcessEnv = { DISABLE_AUTOUPDATER: '1' };
@@ -105,10 +127,10 @@ function childEnv(): NodeJS.ProcessEnv {
  */
 export function handoff(messages: StoredMessage[], resume: boolean): string {
   const earlier = messages.slice(0, -1);
-  const from = resume ? earlier.findLastIndex((m) => m.meta?.provider === 'claude') + 1 : 0;
-  const prior = earlier.slice(from).slice(-20);
+  const from = resume ? earlier.findLastIndex((m) => m.role === 'assistant' && m.meta?.provider === 'claude') + 1 : 0;
+  const prior = earlier.slice(from);
   if (prior.length === 0) return '';
-  const lines = prior.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${messageText(m).slice(0, 4000)}`);
+  const lines = prior.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${messageText(m)}`);
   return `Conversation so far (earlier turns):\n${lines.join('\n\n')}\n\n`;
 }
 
@@ -142,6 +164,48 @@ export class ClaudeCliProvider implements Provider {
 
   async models(): Promise<ModelInfo[]> {
     return CLAUDE_MODELS;
+  }
+
+  /** A resumed session only hears what came after its last reply, so what you shared needs a new one. */
+  async onShared(chatId: string): Promise<void> {
+    await this.#o.store.update(chatId, { claudeSessionId: undefined });
+  }
+
+  async consult({ model, question, signal }: ConsultRequest): Promise<string> {
+    const o = this.#o;
+    const child = spawn(o.bin, consultArgs({ model, restricted: o.restricted }), {
+      cwd: o.cwd,
+      env: childEnv(),
+      stdio: ['pipe', 'pipe', 'ignore'],
+      shell: false,
+      timeout: CONSULT_TIMEOUT_MS,
+      ...(signal ? { signal } : {}),
+    });
+    let failure: string | null = null;
+    child.on('error', (err) => (failure ??= `could not ask claude: ${err.message}`));
+    child.stdin.on('error', () => undefined);
+    child.stdin.end(question);
+    let result: ClaudeEvent | null = null;
+    for await (const line of createInterface({ input: child.stdout })) {
+      let ev: ClaudeEvent;
+      try {
+        ev = JSON.parse(line) as ClaudeEvent;
+      } catch {
+        continue;
+      }
+      if (ev.type === 'result') result = ev;
+      if (ev.type === 'system' && ev.subtype === 'init' && Array.isArray(ev.tools) && ev.tools.length > 0) {
+        // Defense in depth, as in a turn: this run must have no tools at all.
+        failure = 'claude started with tools, so it was stopped';
+        child.kill('SIGTERM');
+      }
+    }
+    if (failure) throw new Error(failure);
+    const r = result as ClaudeEvent | null;
+    if (!r || r.is_error === true || r.subtype !== 'success' || typeof r.result !== 'string') {
+      throw new Error(`claude: ${typeof r?.result === 'string' && r.result ? r.result : 'no answer'}`);
+    }
+    return r.result;
   }
 
   async runTurn(req: TurnRequest): Promise<TurnResult> {

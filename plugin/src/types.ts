@@ -7,7 +7,7 @@ export type Effort = 'auto' | 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max
 export type Locality = 'local' | 'cloud';
 
 export type ModelInfo = { id: string; label: string; efforts: Effort[] };
-export type ProviderInfo = { id: string; label: string; locality: Locality; models: ModelInfo[]; webSearch?: boolean };
+export type ProviderInfo = { id: string; label: string; locality: Locality; models: ModelInfo[]; webSearch?: boolean; consult?: boolean };
 
 export type ChatMeta = { id: string; title: string; createdAt: number; updatedAt: number; provider?: string; model?: string; effort?: string };
 
@@ -55,11 +55,21 @@ export type ApprovalView = {
   auto?: boolean;
   /** Edits/deletes applied without a click wait this long first, so you can Abort. */
   graceMs?: number;
+  /** Its answer covers only this card, so "Apply all" isn't offered. */
+  alwaysAsk?: boolean;
 };
 
 /** Which changes skip the card, for the graph the bridge uses (see bridge/src/settings.ts). */
 export type AutoApprove = { writes: boolean; edits: boolean; deletes: boolean };
-export type SettingsState = { graph: string | null; writable: boolean; autoApprove: AutoApprove };
+/** The cloud model a local model may ask. */
+export type ConsultTarget = { provider: string; model: string };
+export type SettingsState = { graph: string | null; writable: boolean; autoApprove: AutoApprove; consult?: ConsultTarget | null };
+
+/** What a provider hasn't seen of a chat. `ask`: some of it is new since you last answered. */
+export type ShareState = { ask: boolean; unseen: number; local: boolean };
+
+/** Remembered between sessions. `chatId` is from before tabs; `layout` is the tabs and splits, as JSON. */
+export type Prefs = { provider?: string; model?: string; effort?: Effort; chatId?: string; includePage?: boolean; web?: boolean; layout?: string };
 
 /** Your own instructions for the AI, kept by the bridge. `builtIn` is the fixed part, shown read-only. */
 export type InstructionsState = { text: string; updatedAt: number | null; maxChars: number; builtIn: string; memoryPage?: string | null };

@@ -2,7 +2,7 @@ import { request } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import { createInterface } from 'node:readline';
 import { messageText } from '../chats/store.ts';
-import type { ToolRunner } from '../tools/runner.ts';
+import type { ToolCaller, ToolRunner } from '../tools/runner.ts';
 import { todayLine } from './claude-cli.ts';
 import { isEffort } from './types.ts';
 import type { Effort, ModelInfo, Provider, TurnInfo, TurnRequest, TurnResult } from './types.ts';
@@ -157,7 +157,7 @@ export class OllamaProvider implements Provider {
   async runTurn(req: TurnRequest): Promise<TurnResult> {
     const o = this.#o;
     if (isCloudModel(req.model)) return { stopReason: 'error', error: 'Cloud models are refused: they would send your notes off this Mac.' };
-    const tools = o.runner.tools;
+    const tools = await o.runner.toolsFor(this.locality);
     const turn = { chatId: req.chatId, turnId: req.turnId, locality: this.locality };
     const last = req.messages.at(-1);
     const uuids = last?.meta?.contextUuids ?? [];
@@ -230,7 +230,7 @@ export class OllamaProvider implements Provider {
         pendingBreak = wrote;
         for (const call of calls) {
           const name = call.function?.name ?? '';
-          const content = await this.#runTool(name, call.function?.arguments, turn, budget);
+          const content = await this.#runTool(name, call.function?.arguments, { ...turn, signal: req.signal }, budget);
           messages.push({ role: 'tool', tool_name: name, content });
         }
       }
@@ -243,7 +243,7 @@ export class OllamaProvider implements Provider {
     }
   }
 
-  async #runTool(name: string, raw: unknown, turn: TurnInfo, budgetChars: number): Promise<string> {
+  async #runTool(name: string, raw: unknown, turn: ToolCaller, budgetChars: number): Promise<string> {
     const r = await this.#o.runner.call(name, raw, turn);
     const text = r.isError ? `Error: ${r.text}` : r.text;
     const max = Math.floor(budgetChars / 2);

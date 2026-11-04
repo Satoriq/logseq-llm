@@ -18,7 +18,7 @@ export const responsesWire: Wire = (o: WireOptions): WireSession => {
         model: o.model,
         instructions: o.system,
         input,
-        tools,
+        ...(tools.length > 0 ? { tools } : {}),
         stream: true,
         store: false,
         ...(o.sendEffort && o.effort !== 'auto' ? { reasoning: { effort: level } } : {}),

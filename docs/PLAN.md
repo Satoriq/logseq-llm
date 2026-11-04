@@ -44,6 +44,11 @@
 | 2026-11-04 | **A panel notices a restarted bridge.** A restart killed a running reply, and the panel kept showing "…" forever, because nothing arrives on a quiet chat. Every event stream now opens with a `log.hello` frame carrying the epoch, and the long-poll path compares epochs, so the panel reloads the chat, says the reply was lost and refreshes the version it shows. **Connected-app cards** sit under a "From connected apps" heading and leave 8 s after they finish, and old ones no longer come back on reload. They looked like part of the open chat. Panel 0.10.0. |
 | 2026-11-04 | **API providers (step 4):** Claude, OpenAI, Gemini, Grok, DeepSeek, Mistral and OpenRouter, each behind a key in the Keychain and only offered once it has one (`keys` lists them). Three formats behind one tool loop: Messages (Claude), Responses (OpenAI and xAI, because GPT-6 Astra and GPT-6.1 Sol need it for tool calling) and Chat Completions (the rest). Plain `fetch`, no SDK: the bridge keeps no runtime dependencies. All count as cloud, so they get the filtered transcript, context, memory and tools. Addresses are fixed in code, so config can't point a key at another host; `apiModels` can only add model ids. `store: false` keeps notes off OpenAI's and xAI's servers. Within a turn, thinking and reasoning go back unchanged. **DeepSeek's thinking is off,** because with tools it needs all earlier reasoning sent back and chats keep only text. **Claude uses `fallbacks: "default"`** on Opus, Sonnet and Fable: if a safety check declines, another Claude model answers, and the chat says so. History is capped at 40 messages, because every turn resends it and tokens cost money. Web search is off for these. Tested against fake servers only, as there are no keys yet. Bridge 0.14.0. |
 | 2026-11-04 | **Batch delete: `remove_blocks` replaces `remove_block`.** It takes up to 100 blocks: one card, in page order, and one CLI call (`remove block --id '[1,2]'`). One tool, not two, so small models have no choice to get wrong. A block under another listed block goes with it and is counted once. One hidden or unknown block refuses the whole list, in the same words as a missing one. **The CLI reports every id in a list as deleted, even ones that don't exist,** so at Apply the bridge looks the blocks up again by uuid. If any are gone, nothing is deleted: what the card showed is what goes. That also means a card that waited a long time can't hit a reused id. Bridge 0.15.0, panel 0.10.1. |
+| 2026-11-04 | **Step 5b, simplified by the user: a Yes or No when you switch models**, in place of the four-way consent card. Each provider sees what was said to it, plus what you agreed to share (`shares[provider] = { asked, upTo }` in the chat's metadata). This is stricter than before: two cloud providers are two companies, so one no longer sees the other's turns by default. A local model sees everything, so it's never asked about. Yes covers everything so far; later text needs its own answer. No answer means not shared, so an old panel can only share less. Send is disabled while the question is open. The text says the messages "may quote your #private notes" whenever any came from a local model, because a reply can't be filtered and the bridge can't tell which ones did. Yes on Claude starts a new session: `--resume` would only hand over what came after Claude's last reply. Answers go in the audit log as `consent`, without text. |
+| 2026-11-04 | **Consult mode.** Tool `consult_cloud`, for local models only (`ToolRunner.toolsFor`; never on MCP). The question goes to the model chosen in ⚙ (default: the first cloud model; Off removes the tool) with no chat, notes or tools. `claude -p` runs with `--tools ""`, no MCP config and `--no-session-persistence`, and is stopped if it reports any tool. Checked on the real binary: no tools, no MCP servers, Pro login. The card is `alwaysAsk`: no setting or "Apply all" skips it, and "Apply all" on it trusts nothing after it. The bridge enforces that, not just the missing button. The answer goes back marked as another model's advice, not as the user's words. |
+| 2026-11-04 | **Tabs and splits (asked for by the user).** `panel.ts` is now a shell; each tab is a `ChatView` with its own pickers, composer and stream. The layout is a tree in `layout.ts` with no DOM, so it's unit tested. A group is a row of tabs; a split shares its space equally between two children. Drag with pointer events, because Logseq uses HTML drag and drop for blocks. Hidden idle tabs follow nothing and reload when shown, so open tabs cost no connections; a hidden tab with a reply running stays connected for its cards and shows **?** when one waits. A chat can only be in one tab. Layout is saved as one JSON string in the plugin's settings. Bridge 0.16.0, panel 0.11.0. |
+| 2026-11-04 | **Step 7 trigger: `@ai`,** chosen by the user, in place of the `[[AI]]` page. As plain text it also avoids the clash with the `#ai` tag, since page names are case-insensitive. To check at step 7: how Logseq DB treats `@` in a block or comment. |
+| 2026-11-04 | **After the first look, from the user:** a Yes sends **all** the text, so the handoff to Claude no longer stops at 20 messages of 4,000 characters, and the API providers no longer stop at 40 messages. That means every API turn costs more in a long chat. The **consult card is plain Yes / No,** because a question can be long (up to 4,000 characters): the text is folded under "Show the question" rather than removed, since it could repeat something private. The note box is gone from that card. **The line between two splits can be dragged,** from 15% to 85%, and double-clicking it goes back to half. Bridge 0.16.1, panel 0.11.1. |
 | open | Q5 voice edits, Q6 trigger, Q7 D approval (defaults in §3). |
 
 An AI chat panel inside Logseq DB (desktop, macOS) for personal use. It has a
@@ -576,12 +581,12 @@ exits. The token is in a file so it doesn't show up in `ps`.
   2. Continue that session with `--resume`.
   3. Copy claude's text and its tool calls back into our transcript. The tool
      calls pass through our MCP server, so the bridge already has them.
-- **Consent card:** as in the brief: *Ask once*, *Switch this chat*, *Stay
-  local*, *Review what's sent*. The bridge computes the payload, not the model,
-  so a model can't choose to include hidden blocks.
+- **Sharing when you switch:** a Yes or No question in the panel, built 2026-11-04 (this
+  replaced the four-way card from the brief). See the decisions log. The bridge
+  computes what's sent, not the model, so a model can't choose to include hidden blocks.
 - **Consult mode:** the cloud model gets only the question the local model
   wrote, with no tools. That text could repeat things the local model saw, so
-  the card shows it word for word.
+  the card shows it word for word. Built 2026-11-04.
 
 ### 4.9 D: comment and #Task worker. How it detects work.
 
@@ -593,7 +598,7 @@ startup.**
   **UUIDs only**.
 - The bridge re-reads each candidate through the CLI. It queues work when it
   finds either:
-  - a block tagged *Comment* that references the `[[AI]]` page, or
+  - a block tagged *Comment* that contains `@ai` (decided 2026-11-04), or
   - a #Task whose `logseq.property/assignee` is `AI` and whose status is todo.
 - At bridge start and after a reconnect, one CLI query finds unanswered
   requests from the last N days. **You confirm before a backlog is processed.**
@@ -674,10 +679,10 @@ text to a cloud model. Step 0 is new.
 | 1c ✅ | `claude -p` provider and the `/mcp` endpoint (per-turn tokens, read tools filtered as cloud), the startup guard, context, handoff, `check-claude` | `docs/TESTING.md` §1c |
 | 2 ✅ | Plugin panel injected into the DOM: side setting, pickers, streaming, "…" indicator, tool steps, page and block context, safe renderer | `docs/TESTING.md` §2 |
 | 3 ✅ | Writes: approval cards (dry-run where the CLI has it), `#AI-GENERATED`, `writeGraphs`, write-side privacy checks and warnings | `docs/TESTING.md` §3 |
-| 4 | Anthropic and OpenAI API providers, with keys in the Keychain | Switch providers mid-chat |
-| 5 | Ollama provider and model (**needs approval**), escalation, consent cards, consult mode | Local chat → escalate → review what's sent |
+| 4 ✅ | Anthropic and OpenAI API providers, with keys in the Keychain | Switch providers mid-chat |
+| 5 ✅ | Ollama provider and model (**needs approval**), sharing on switch, consult mode | Local chat → switch → share or not |
 | 6 | Save chat to graph (`#AIChat` page, one block per message) | Save a chat in the sandbox graph |
-| 7 | D worker (comments and #Tasks) with the Inbox | Comment `[[AI]] …` in the sandbox graph |
+| 7 | D worker (comments and #Tasks) with the Inbox | Comment `@ai …` in the sandbox graph |
 | 8 | Voice helper (3A) | Hotkey → speak → reply in the panel |
 
 ---

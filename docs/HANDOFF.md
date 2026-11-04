@@ -40,7 +40,7 @@ Graph access goes through the official `logseq` CLI.
 **Providers:**
 - `claude -p` on the user's Pro plan (done).
 - Anthropic API, OpenAI API and others (built; not yet tried with real keys).
-- Ollama, local (done; escalation still to come).
+- Ollama, local (done, with sharing on switch and consult mode).
 
 **Privacy:**
 - allow/deny lists;
@@ -81,16 +81,17 @@ providers · 5 Ollama + escalation · 6 save chat · 7 D worker · 8 voice.
 | Extras built since: properties, your instructions, step folding, web search, login agent, memory | ✅ built and tested here; **partly confirmed on the Mac** (see below) |
 | Claude Desktop and Codex, reads and writes | ✅ built; path through the real adapter and bridge checked against AI Sandbox; **panel dock and the apps themselves not yet confirmed** (TESTING 4j) |
 | Shared provider groundwork | ✅ built and tested |
-| 5a Ollama provider (`gemma4:12b`) | ✅ built; **panel use not yet confirmed** (TESTING 4k) |
-| 5b escalation, consent cards, consult mode | **next** |
+| 5a Ollama provider (`gemma4:12b`) | ✅ done, and the user confirmed it works in the panel |
+| 5b share on switch (Yes/No), consult mode | ✅ built; bridge tests, real headless browser and real `claude` flags checked; **not yet tried in Logseq** (TESTING 4o, 4p) |
+| Tabs and splits, each with its own model | ✅ built; real headless browser with real drags; **not yet tried in Logseq** (TESTING 4q) |
 | 4 API providers (Claude, OpenAI, Gemini, Grok, DeepSeek, Mistral, OpenRouter) | ✅ built; **tested against fake servers only**, as the user has no keys yet (TESTING 4m) |
 | Real graph | not in scope for now: the user works on the test graph |
-| 6 save chat to graph | small, any time |
+| 6 save chat to graph | **next**, small |
 | 7 D worker (comments / #Tasks, Inbox) | later |
 | 8 voice helper | later |
 | UI polish pass (T3-Code-like) | later |
 
-**Current versions:** bridge **0.15.0**, panel **0.10.1**. The panel's status line
+**Current versions:** bridge **0.16.1**, panel **0.11.1**. The panel's status line
 shows both, which is how you tell which build is running.
 
 **Confirmed on the user's Mac:**
@@ -107,9 +108,10 @@ shows both, which is how you tell which build is running.
 **Not yet confirmed on the Mac:**
 - property reads and edits in real use (TESTING 4e);
 - the ✎ instructions editor (4f);
-- a chat through the login agent;
+- a Claude reply through the login agent (Ollama chats have run through it);
 - memory (4i);
-- Claude Desktop and Codex themselves, and the panel's card dock (4j).
+- Claude Desktop and Codex themselves, and the panel's card dock (4j);
+- the settings window (4l), batch delete (4n), sharing (4o), consult (4p), tabs and splits (4q).
 
 Ask the user for these results before building on them.
 
@@ -125,8 +127,14 @@ Ask the user for these results before building on them.
 - **Ways to open it:** a toolbar "AI" button, ⌘⌥A, a block context menu entry ("Ask
   Logseq AI about this block"), a slash command, and a command-palette entry for
   selected blocks.
-- **Pickers:** chat, provider, model and effort. The current page is sent as context
-  (a chip you can turn off), and blocks can be pinned as context.
+- **Tabs and splits:** each tab is one chat with its own provider, model and effort.
+  Drag a tab to an edge to halve that area; drag to the middle or a tab row to join. Drag the
+  line between two chats to resize them; double-click it for half and half.
+  Closing the last tab of a half gives the space back. **Open a chat…** reopens old ones.
+  Saved as `prefLayout` in the plugin's settings.
+- **Pickers:** provider, model and effort, per tab. The current page is sent as context
+  (a chip you can turn off), and blocks can be pinned as context in the tab you're in.
+- **Sharing:** switching a chat to a model that hasn't seen part of it asks Yes or No.
 - **Streaming:** reply text streams in, a "…" indicator shows activity, and tool steps
   are listed as they run. Two or more steps fold into `▸ N steps · ✓ N` 1 s after the
   reply ends; click the line to open it.
@@ -196,7 +204,8 @@ Ask the user for these results before building on them.
   `wire-responses` (OpenAI, xAI) and `wire-chat` (Gemini, DeepSeek, Mistral, OpenRouter).
   - Keys come from the Keychain, and a provider is hidden until it has one.
   - Addresses are fixed in code. `apiModels` in config only adds model ids.
-  - They count as cloud, up to 20 tool rounds and the last 40 messages per turn.
+  - They count as cloud, with up to 20 tool rounds per turn. Every turn sends all the text this
+    provider may see, so a long chat costs more per message.
   - Rate limits and server errors are retried twice. The Claude version header is
     `2026-10-21`, so don't send `temperature`, `top_p` or `top_k`.
 - **System prompt** = the built-in `prompts/claude-system.md`, then the user's
@@ -231,6 +240,7 @@ Ask the user for these results before building on them.
   - `create_task`, `create_page`.
   - `remove_blocks`: up to 100 blocks in one call, one card, each with everything under it.
   - `remember`, `forget`: these touch the memory page only.
+  - `consult_cloud`: local models only. One question to a cloud model, on a card no setting skips.
 - **Output format:**
   - Each block line ends with `[id:<uuid>]`.
   - Tags appear as ` #tag`.
@@ -510,6 +520,9 @@ privacy filter. Never point a client at it. PLAN §6 assumed this server stays o
 - **Blocks deleted through the CLI don't go to Logseq's recycle bin.** Pages do, unless `remove page --force`.
 - **The CLI's current graph is `Logseq DB`, not AI Sandbox.** Always pass `-g "AI Sandbox"` by hand.
 
+- **`--strict-mcp-config` with no `--mcp-config` and `--tools ""`** starts `claude -p` with no tools and no
+  MCP servers. Checked on 2.1.317. Consult mode relies on it.
+
 ## 8. Repo map
 
 ```
@@ -523,17 +536,19 @@ bridge/
   src/mcp/clients.ts           connected apps: tokens, connect / disconnect
   src/mcp/stdio.ts             stdio adapter that Claude Desktop and Codex start
   src/approvals.ts             approval queue, auto/grace/abort/apply-all
-  src/chats/{store,turns}.ts   transcripts, one turn at a time per chat
+  src/chats/{store,turns}.ts   transcripts, who sees what, one turn at a time per chat
   src/providers/{claude-cli,ollama,echo,types}.ts
   src/providers/{api,stream,wire-anthropic,wire-responses,wire-chat}.ts   API providers
   src/graph/{reader,entity}.ts CLI queries → normalized nodes (props, tags, refs)
   src/policy/{rules,policy,redact}.ts  privacy filter
-  src/tools/{cli,read,write,properties,registry,runner}.ts
+  src/tools/{cli,read,write,consult,properties,registry,runner}.ts
   src/keychain.ts, settings.ts, instructions.ts, memory.ts, agent.ts, doctor.ts, check-claude.ts, audit.ts, auth.ts, events.ts, log.ts
   test/*.test.ts + fixtures/ (fake-graph.ts = in-memory CLI, fake-claude.mjs = stream-json stand-in)
 plugin/
-  src/main.ts (Logseq wiring, settings) · panel.ts (UI) · changes.ts (cards) · render.ts (safe Markdown)
+  src/main.ts (Logseq wiring, settings) · panel.ts (shell, tabs, dragging) · chatview.ts (one chat)
+  src/layout.ts (tabs and splits as data) · changes.ts (cards) · render.ts (safe Markdown)
   src/bridge.ts (client) · host.ts (DOM mount) · types.ts · version.ts · panel.css
+  test/layout.test.ts
 docs/PLAN.md · docs/TESTING.md · docs/HANDOFF.md (this file)
 ```
 
@@ -565,9 +580,12 @@ cd plugin && npm run build
 
 Then switch the plugin off and on in Logseq.
 
-**Browser tests:** the panel was tested in a Playwright harness against a real
-bridge, a fake graph and a fake claude. The harness was a scratch setup and **is not
-in the repo**; add one under `plugin/test/` if you need it again.
+**Browser tests:** the panel was tested in a real browser against a real bridge, a fake
+graph, a fake Ollama and a fake claude. Nothing to install: run an installed Chromium
+browser with `--headless=new --remote-debugging-port=0` and a temporary profile, and drive it
+over DevTools with Node's built-in `WebSocket`. `Input.dispatchMouseEvent` gives real drags,
+and `Page.captureScreenshot` shows what they look like. The harness was a scratch setup and
+**is not in the repo**; add one under `plugin/test/` if you need it again.
 
 **After every change:**
 1. Bump `BRIDGE_VERSION` and/or `PANEL_VERSION`.
@@ -590,21 +608,17 @@ The real graph is out of scope for now. Next: try the API providers once there a
 1. **Get the Mac results** listed in §3 first, especially 4i and 4j.
 2. **Local model speed and memory.** Ask before pulling anything else. Try
    `gemma4:12b-it-q4_K_M` (this build is `nvfp4`), and a smaller `ollamaContext`.
-3. **Step 5b, escalation.** Local chats stay local today, and a cloud model can't see them.
-   The consent card is what lets a chosen part cross over.
-   - **Plan (PLAN.md §4.8):** consent cards with Ask once / Switch this chat / Stay local /
-     Review what's sent. Consult mode sends only the question.
-4. **Step 6, save chat:** an `#AIChat` page, one block per message.
-5. **Step 7, the D worker:**
-   - It watches comments mentioning the AI and #Tasks assigned to it, fed by
+3. **Step 6, save chat:** an `#AIChat` page, one block per message.
+4. **Step 7, the D worker:**
+   - It watches comments with `@ai` (the user's choice) and #Tasks assigned to it, fed by
      `DB.onChanged` → bridge, with UUIDs only.
    - Its drafts wait as cards in an Inbox (open question Q7, default: every write
      needs approval).
-   - It needs a mention page other than "ai", and it must ignore its own blocks.
-6. **Step 8, voice:** a Swift helper with a global hotkey. Open questions Q5 (voice
+   - It must ignore its own blocks. Check how Logseq DB treats `@` first.
+5. **Step 8, voice:** a Swift helper with a global hotkey. Open questions Q5 (voice
    edits: add-only, confirmed with a click) and Q6 (the hotkey; Shortcuts support
    later).
-7. **UI polish pass** for the panel.
-8. **Ideas parked:**
+6. **UI polish pass** for the panel.
+7. **Ideas parked:**
    - WebFetch with a per-URL approval card;
    - a committed browser-test harness.
