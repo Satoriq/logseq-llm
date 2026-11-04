@@ -25,7 +25,7 @@ export async function checkClaude(opts: {
   const preview = claudeArgs({
     mcpConfigPath: '<data>/run/mcp-<turn>.json',
     allowedTools: rt.mcp.toolNames().map((n) => `mcp__lsq__${n}`),
-    systemPrompt: '<prompts/claude-system.md>',
+    systemPromptFile: '<data>/run/system-<turn>.md',
     model: opts.model,
     effort: opts.effort,
     sessionId: '<new uuid>',

@@ -89,6 +89,7 @@ const CLAUDE_FLAGS_NEEDED = [
   '--permission-prompts',
   '--disable-slash-commands',
   '--system-prompt',
+  '--system-prompt-snapshot',
   '--model',
   '--effort',
   '--session-id',

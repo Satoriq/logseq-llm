@@ -16,6 +16,7 @@ import { ClaudeCliProvider } from './providers/claude-cli.ts';
 import { EchoProvider } from './providers/echo.ts';
 import { LogseqCli } from './tools/cli.ts';
 import { GraphGuard, readTools } from './tools/read.ts';
+import { Instructions } from './instructions.ts';
 import type { ToolDef } from './tools/registry.ts';
 import { writeTools } from './tools/write.ts';
 import type { OwnBlocks } from './tools/write.ts';
@@ -106,7 +107,8 @@ export async function createRuntime(opts: { config: BridgeConfig; paths: DataPat
     return parts.join('\n\n');
   };
 
-  const systemPrompt = await readFile(new URL('../prompts/claude-system.md', import.meta.url), 'utf8');
+  const builtIn = await readFile(new URL('../prompts/claude-system.md', import.meta.url), 'utf8');
+  const instructions = new Instructions({ file: paths.instructions, builtIn });
   const claude = new ClaudeCliProvider({
     bin: config.claudeBin,
     cwd: paths.claudeCwd,
@@ -115,7 +117,7 @@ export async function createRuntime(opts: { config: BridgeConfig; paths: DataPat
     sessions: mcp.sessions,
     toolNames: () => mcp.toolNames(),
     store,
-    systemPrompt,
+    systemPrompt: () => instructions.systemPrompt(),
     restricted: config.claudeRestricted,
     renderContext,
     turnTimeoutMs: 15 * 60_000,
@@ -128,7 +130,7 @@ export async function createRuntime(opts: { config: BridgeConfig; paths: DataPat
     // A cancelled or finished turn can't apply anything any more.
     onSettled: (chatId) => approvals.rejectAll(chatId, 'cancelled'),
   });
-  const server = createBridgeServer({ port, allowedOrigins: config.allowedOrigins, tokens, store, turns, mcp, approvals });
+  const server = createBridgeServer({ port, allowedOrigins: config.allowedOrigins, tokens, store, turns, mcp, approvals, instructions, audit });
   return {
     server,
     turns,

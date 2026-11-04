@@ -39,7 +39,8 @@ export type ClaudeCliOptions = {
   sessions: McpSessions;
   toolNames: () => string[];
   store: ChatStore;
-  systemPrompt: string;
+  /** Built-in prompt plus your instructions, read fresh for every turn. */
+  systemPrompt: () => Promise<string>;
   /** --restricted (default true). Turn off only if your claude version rejects it. */
   restricted: boolean;
   /** Renders the page/selection the user attached, filtered for cloud. */
@@ -51,7 +52,8 @@ export type ClaudeCliOptions = {
 export function claudeArgs(o: {
   mcpConfigPath: string;
   allowedTools: string[];
-  systemPrompt: string;
+  /** 0600 file with the system prompt: a file, so it doesn't show up in `ps`. */
+  systemPromptFile: string;
   model: string;
   effort: Effort;
   sessionId: string;
@@ -72,7 +74,9 @@ export function claudeArgs(o: {
     '--permission-mode', 'dontAsk',
     '--permission-prompts', 'none',
     '--disable-slash-commands',
-    '--system-prompt', o.systemPrompt,
+    '--system-prompt-file', o.systemPromptFile,
+    // Otherwise claude keeps a chat's first system prompt for good, and edited instructions would never arrive.
+    '--system-prompt-snapshot', 'off',
     '--model', o.model,
     ...(o.effort !== 'auto' ? ['--effort', o.effort] : []),
     ...(o.resume ? ['--resume', o.sessionId] : ['--session-id', o.sessionId]),
@@ -138,6 +142,8 @@ export class ClaudeCliProvider implements Provider {
 
     const mcp = o.sessions.create(req.chatId, req.turnId, 'cloud');
     const mcpConfigPath = join(o.runDir, `mcp-${req.turnId}.json`);
+    const systemPromptFile = join(o.runDir, `system-${req.turnId}.md`);
+    await writeFile(systemPromptFile, await o.systemPrompt(), { mode: 0o600 });
     const toolNames = o.toolNames();
     const expectedTools = new Set(toolNames.map((n) => `mcp__${MCP_SERVER_NAME}__${n}`));
     await writeFile(
@@ -158,7 +164,7 @@ export class ClaudeCliProvider implements Provider {
     const args = claudeArgs({
       mcpConfigPath,
       allowedTools: [...expectedTools],
-      systemPrompt: o.systemPrompt,
+      systemPromptFile,
       model: req.model,
       effort: req.effort,
       sessionId,
@@ -263,6 +269,7 @@ export class ClaudeCliProvider implements Provider {
     req.signal.removeEventListener('abort', onAbort);
     o.sessions.revoke(mcp);
     await unlink(mcpConfigPath).catch(() => undefined);
+    await unlink(systemPromptFile).catch(() => undefined);
 
     if (req.signal.aborted) return { stopReason: 'cancelled' };
     const r = result as ClaudeEvent | null;

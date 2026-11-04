@@ -54,6 +54,9 @@ export type ApprovalView = {
   graceMs?: number;
 };
 
+/** Your own instructions for the AI, kept by the bridge. `builtIn` is the fixed part, shown read-only. */
+export type InstructionsState = { text: string; updatedAt: number | null; maxChars: number; builtIn: string };
+
 export type ChatState = { chat: ChatMeta; messages: StoredMessage[]; busy: boolean; lastSeq: number; epoch: string; approvals?: ApprovalView[] };
 
 /** What the panel needs from Logseq (real implementation in main.ts, a fake in tests). */

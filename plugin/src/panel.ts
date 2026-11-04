@@ -53,6 +53,8 @@ export class Panel {
     model: HTMLSelectElement;
     effort: HTMLSelectElement;
     log: HTMLElement;
+    foot: HTMLElement;
+    instrBtn: HTMLButtonElement;
     chips: HTMLElement;
     input: HTMLTextAreaElement;
     send: HTMLButtonElement;
@@ -70,6 +72,8 @@ export class Panel {
   #pinned = new Map<string, string>();
   #changes: ChangeCards;
   #destroyed = false;
+  /** The open instructions editor, if any. */
+  #instr: { root: HTMLElement; close: (force?: boolean) => void } | null = null;
 
   constructor(root: HTMLElement, deps: PanelDeps) {
     this.root = root;
@@ -105,9 +109,11 @@ export class Panel {
     const chatSelect = this.#h('select', 'lsai-select lsai-chat');
     chatSelect.title = 'Chats';
     chatSelect.addEventListener('change', () => void this.#selectChat(chatSelect.value || null));
+    const instrBtn = this.#button('lsai-icon', '✎', 'Your instructions for the AI', () => void this.#toggleInstructions());
     row1.append(
       chatSelect,
       this.#button('lsai-icon', '＋', 'New chat', () => void this.#selectChat(null)),
+      instrBtn,
       this.#button('lsai-icon', '×', 'Close the panel', () => this.#d.onClose()),
     );
     const row2 = this.#h('div', 'lsai-row');
@@ -160,8 +166,134 @@ export class Panel {
     }
 
     this.root.append(head, log, foot);
-    this.#els = { status, chatSelect, provider, model, effort, log, chips, input, send, stop };
+    this.#els = { status, chatSelect, provider, model, effort, log, foot, instrBtn, chips, input, send, stop };
     this.#renderChips();
+  }
+
+  // ---------- your instructions ----------
+
+  /** Opens the editor in place of the chat, or closes it. */
+  async #toggleInstructions(): Promise<void> {
+    if (this.#instr) {
+      this.#instr.close();
+      return;
+    }
+    const b = this.#d.bridge;
+    const root = this.#h('div', 'lsai-instr');
+    const title = this.#h('div', 'lsai-instr-head');
+    title.append(this.#h('strong', undefined, 'Your instructions'), this.#h('span', 'lsai-hint', 'kept on this Mac · every chat'));
+    const help = this.#h(
+      'div',
+      'lsai-instr-help',
+      'Tell the AI how to work for you: language, tone and length of answers, what you do, how your notes are organized. ' +
+        'Used from your next message, in every chat. Privacy rules and approvals always stay on.',
+    );
+    const text = this.#h('textarea', 'lsai-input lsai-instr-text');
+    text.rows = 12;
+    text.spellcheck = true;
+    text.placeholder =
+      'For example:\n- Answer in Russian, short and to the point.\n- I am a product manager; projects are pages tagged #project.\n' +
+      '- Put summaries at the top of a page, as bullet points.\n- Ask before rewriting more than a few blocks.';
+    const count = this.#h('span', 'lsai-hint');
+    const builtIn = this.#h('details', 'lsai-instr-builtin');
+    builtIn.appendChild(this.#h('summary', undefined, 'Built-in rules (always on, come first)'));
+    const builtInText = this.#h('pre', 'lsai-card-pre');
+    builtIn.appendChild(builtInText);
+    const state = this.#h('span', 'lsai-hint');
+    const close = this.#button('lsai-btn2', 'Close', 'Close (Esc)', () => done());
+    const save = this.#button('lsai-send', 'Save', 'Save (⌘S or ⌘Enter)', () => void doSave());
+    const actions = this.#h('div', 'lsai-actions');
+    actions.append(state, close, save);
+    const countRow = this.#h('div', 'lsai-instr-count');
+    countRow.appendChild(count);
+    root.append(title, help, text, countRow, actions, builtIn);
+
+    let saved = '';
+    let max = 8000;
+    let loaded = false;
+    let warnedDirty = false;
+    const refresh = (): void => {
+      const n = text.value.trim().length;
+      count.textContent = `${n} / ${max}`;
+      count.classList.toggle('lsai-bad', n > max);
+      save.disabled = !loaded || n > max || text.value.trim() === saved;
+    };
+    const done = (force = false): void => {
+      if (!force && loaded && text.value.trim() !== saved && !warnedDirty) {
+        warnedDirty = true;
+        state.textContent = 'Not saved. Close again to discard.';
+        state.className = 'lsai-hint lsai-bad';
+        return;
+      }
+      root.remove();
+      this.#instr = null;
+      this.#els.instrBtn.classList.remove('lsai-on');
+      this.#els.log.hidden = false;
+      this.#els.foot.hidden = false;
+      this.#els.input.focus();
+    };
+    const doSave = async (): Promise<void> => {
+      if (!b || save.disabled) return;
+      save.disabled = true;
+      state.className = 'lsai-hint';
+      state.textContent = 'Saving…';
+      try {
+        const r = await b.saveInstructions(text.value);
+        saved = r.text;
+        text.value = r.text;
+        warnedDirty = false;
+        state.textContent = r.text === '' ? 'Cleared. The AI uses only the built-in rules.' : 'Saved. Used from your next message.';
+        state.className = 'lsai-hint lsai-good';
+      } catch (err) {
+        state.textContent = `Not saved: ${(err as Error).message}`;
+        state.className = 'lsai-hint lsai-bad';
+      }
+      refresh();
+    };
+    text.addEventListener('input', () => {
+      warnedDirty = false;
+      if (state.textContent?.startsWith('Not saved.')) state.textContent = '';
+      refresh();
+    });
+    text.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'Enter')) {
+        e.preventDefault();
+        void doSave();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        done();
+      }
+    });
+
+    this.#instr = { root, close: done };
+    this.#els.instrBtn.classList.add('lsai-on');
+    this.#els.log.hidden = true;
+    this.#els.foot.hidden = true;
+    this.#els.log.after(root);
+    text.disabled = true;
+    state.textContent = 'Loading…';
+    refresh();
+    if (!b) {
+      state.textContent = 'Connect the bridge first (see the setup notes).';
+      state.className = 'lsai-hint lsai-bad';
+      return;
+    }
+    try {
+      const r = await b.instructions();
+      saved = r.text;
+      max = r.maxChars;
+      text.value = r.text;
+      builtInText.textContent = r.builtIn;
+      loaded = true;
+      text.disabled = false;
+      state.textContent = r.updatedAt ? `Last saved ${new Date(r.updatedAt).toLocaleString()}` : '';
+      text.focus();
+    } catch (err) {
+      const old = err instanceof BridgeError && err.status === 404;
+      state.textContent = old ? 'This bridge is too old for instructions: update it (bridge 0.7.0 or newer) and restart it.' : `Could not load: ${(err as Error).message}`;
+      state.className = 'lsai-hint lsai-bad';
+    }
+    refresh();
   }
 
   // ---------- lifecycle ----------

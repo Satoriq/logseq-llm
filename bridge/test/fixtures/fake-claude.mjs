@@ -14,6 +14,8 @@ writeFileSync('fake-claude-argv.json', JSON.stringify(argv));
 writeFileSync('fake-claude-env.json', JSON.stringify(Object.keys(process.env)));
 writeFileSync('fake-claude-prompt.txt', prompt);
 writeFileSync('fake-claude-mcp.json', JSON.stringify(mcp));
+// The bridge deletes this file after the turn, so keep a copy for the tests.
+writeFileSync('fake-claude-system.txt', get('--system-prompt-file') ? readFileSync(get('--system-prompt-file'), 'utf8') : '(none)');
 
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\n');
 const session = get('--session-id') ?? get('--resume');

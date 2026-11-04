@@ -11,6 +11,9 @@ import { log } from '../log.ts';
 import { isEffort } from '../providers/types.ts';
 import type { McpEndpoint } from '../mcp/endpoint.ts';
 import type { Approvals } from '../approvals.ts';
+import type { AuditLog } from '../audit.ts';
+import { InstructionsError, MAX_INSTRUCTION_CHARS } from '../instructions.ts';
+import type { Instructions } from '../instructions.ts';
 
 /**
  * HTTP API on 127.0.0.1. Checks, in order, for every request:
@@ -30,6 +33,9 @@ export type ServerDeps = {
   /** MCP endpoint for `claude -p` (per-process tokens). Optional so tests can omit it. */
   mcp?: McpEndpoint;
   approvals?: Approvals;
+  /** Your own instructions for the AI. Optional so tests can omit it. */
+  instructions?: Instructions;
+  audit?: AuditLog;
 };
 
 const MAX_BODY = 1024 * 1024;
@@ -244,6 +250,26 @@ export function createBridgeServer(deps: ServerDeps): Server {
         list.push({ id: p.id, label: p.label, locality: p.locality, models: await p.models() });
       }
       send(res, 200, { providers: list }, cors);
+      return;
+    }
+
+    if (a === 'instructions' && parts.length === 2 && (method === 'GET' || method === 'POST')) {
+      requireScope(scope, 'plugin');
+      const ins = deps.instructions;
+      if (!ins) throw new HttpError(404, 'not found');
+      if (method === 'POST') {
+        const body = await readJson(req);
+        try {
+          const saved = await ins.set(body.text);
+          // Length only: the audit log never holds text.
+          void deps.audit?.record({ kind: 'settings', chatId: 'bridge', tool: 'instructions', outcome: `saved ${saved.text.length} chars` });
+        } catch (err) {
+          if (err instanceof InstructionsError) throw new HttpError(400, err.message);
+          throw err;
+        }
+      }
+      const cur = await ins.get();
+      send(res, 200, { text: cur.text, updatedAt: cur.updatedAt, maxChars: MAX_INSTRUCTION_CHARS, builtIn: ins.builtIn }, cors);
       return;
     }
 

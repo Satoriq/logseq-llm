@@ -6,7 +6,7 @@ import { log } from './log.ts';
  * by id, never the content itself.
  */
 export type AuditEntry = {
-  kind: 'turn.start' | 'turn.end' | 'tool' | 'write' | 'consent';
+  kind: 'turn.start' | 'turn.end' | 'tool' | 'write' | 'consent' | 'settings';
   chatId: string;
   turnId?: string;
   provider?: string;

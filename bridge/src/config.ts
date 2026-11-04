@@ -4,7 +4,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { parseRule } from './policy/rules.ts';
 
 export const BRIDGE_NAME = 'logseq-ai-bridge';
-export const BRIDGE_VERSION = '0.6.0';
+export const BRIDGE_VERSION = '0.7.0';
 export const DEFAULT_PORT = 47615;
 export const MIN_NODE_MAJOR = 26;
 
@@ -67,6 +67,8 @@ export type DataPaths = {
   run: string;
   claudeCwd: string;
   doctor: string;
+  /** Your own instructions for the AI (edited in the panel). */
+  instructions: string;
 };
 
 export function defaultDataDir(): string {
@@ -91,6 +93,7 @@ export function dataPaths(root: string): DataPaths {
     run: join(root, 'run'),
     claudeCwd: join(root, 'claude-cwd'),
     doctor: join(root, 'doctor'),
+    instructions: join(root, 'instructions.md'),
   };
 }
 

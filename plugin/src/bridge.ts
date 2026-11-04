@@ -1,4 +1,4 @@
-import type { BridgeEvent, ChatMeta, ChatState, Effort, ProviderInfo } from './types';
+import type { BridgeEvent, ChatMeta, ChatState, Effort, InstructionsState, ProviderInfo } from './types';
 
 /**
  * Client for the local bridge.
@@ -109,6 +109,14 @@ export class BridgeClient {
 
   decide(approvalId: string, decision: 'apply' | 'reject' | 'apply-all' | 'abort', note?: string): Promise<{ ok: boolean }> {
     return this.#call('POST', `/v1/approvals/${encodeURIComponent(approvalId)}`, { decision, ...(note ? { note } : {}) });
+  }
+
+  instructions(): Promise<InstructionsState> {
+    return this.#call('GET', '/v1/instructions');
+  }
+
+  saveInstructions(text: string): Promise<InstructionsState> {
+    return this.#call('POST', '/v1/instructions', { text });
   }
 
   cancel(id: string): Promise<{ cancelled: boolean }> {
